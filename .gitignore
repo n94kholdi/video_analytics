@@ -1,0 +1,45 @@
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+
+All_videos
+All_weights
+CV_models
+~/.agents/skills
+
+
+# Local environments and configuration
+.venv/
+.env
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Phase outputs. Keep the directory itself as part of the scaffold.
+outputs/*
+!outputs/.gitkeep
+
+# Generated runtime artifacts outside the default output directory
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.sqlite
+*.sqlite3
+*.db
+*.jsonl
+*.log
+*.tmp
+*.temp
+*heatmap*.png
+*heatmap*.npy
+*heatmap*.csv
+

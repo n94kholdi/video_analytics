@@ -1,0 +1,17 @@
+app:
+  name: video-analytics-mvp
+  environment: development
+  log_level: INFO
+
+paths:
+  output_dir: outputs
+  database_path: outputs/video_analytics.sqlite3
+
+onnx:
+  providers:
+    - CPUExecutionProvider
+  detector_model: ../../All_weights/Weights_final/HumanDetection_light_input_640.onnx
+
+detector:
+  confidence_threshold: 0.40
+  iou_threshold: 0.70

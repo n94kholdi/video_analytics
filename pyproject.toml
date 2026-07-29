@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-analytics-mvp"
+version = "0.1.0"
+description = "Headless-first video people analytics MVP"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24,<3",
+    "onnxruntime>=1.17,<2",
+    "opencv-python-headless>=4.8,<5",
+    "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.27,<1",
+]
+dashboard = [
+    "streamlit>=1.32,<2",
+]
+dev = [
+    "pytest>=8,<9",
+]
+
+[project.scripts]
+video-analytics-detect = "app.detection.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
