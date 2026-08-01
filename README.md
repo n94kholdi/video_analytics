@@ -4,9 +4,10 @@ This is the isolated application scaffold for a medium-complexity, video-based
 people analytics MVP. Existing computer-vision experiments and model weights
 remain outside this directory and are treated as read-only inputs.
 
-Phase 2 adds CPU-capable ONNX person detection for the verified light model.
-Tracking, geometry, analytics, persistence behavior, API routes, and dashboard
-behavior are intentionally not implemented yet.
+Phase 5 adds current occupancy and directional entry/exit counting on top of
+the validated camera geometry and shared tracker observations. Restricted-area,
+heatmap, queue, persistence, API, and dashboard behavior remain intentionally
+unimplemented.
 
 ## Planned scope
 
@@ -57,13 +58,55 @@ The detector is separated into:
 Preprocessing, inference, post-processing, and visualization timing/behavior do
 not overlap.
 
+Tracking is separated into:
+
+- `app.tracking.base`: tracker-independent protocol and per-frame result
+- `app.tracking.bytetrack`: maintained ByteTrack dependency adapter, person-only
+  conversion, lifecycle cleanup, and bounded EMA-smoothed foot-point history
+- `app.tracking.visualization`: track IDs, state, foot points, and trajectories
+- `app.tracking.cli`: recorded-video detector/tracker runner using source times
+
+`TrackObservation` and `TrajectoryPoint` live in `app.core.models`, so future
+analytics do not depend on ByteTrack or Supervision objects. Raw trajectory
+positions are bounding-box bottom centers; each sample also retains an
+EMA-smoothed position for later speed and queue analytics.
+
+Camera geometry is separated into:
+
+- `app.geometry.config`: validated camera/analytics YAML models, normalized
+  zones, directed counting lines, queue service points, and calibration pairs
+- `app.geometry.primitives`: inclusive-boundary polygon membership, polygon
+  validation, directed line sides, and finite-segment crossing results
+- `app.geometry.calibration`: fixed-resolution homography construction and an
+  explicit unavailable result when calibration is not configured
+- `scripts/configure_camera.py`: optional Tk reference-frame point selector
+
+People counting is separated into:
+
+- `app.analytics.counting`: confirmed-track polygon occupancy, hysteresis-based
+  finite-line crossings, per-camera state, cumulative totals, and explicit reset
+- `app.analytics.visualization`: composable occupancy and entry/exit overlays
+- `app.core.models.Event`: shared event envelope used for `line_crossed` events
+
+Each counting line has a normalized `hysteresis` value. It is interpreted as a
+fraction of the frame diagonal, creating a resolution-independent dead band on
+both sides of the line. A track must move from one stable side to the other and
+cross the configured finite segment before it is counted. Tracks on the line or
+moving only within the dead band do not increment totals.
+
+Normalized `(0, 0)` and `(1, 1)` map to inclusive pixel corners `(0, 0)` and
+`(width - 1, height - 1)`. Ground projection is only available through a
+validated calibration containing at least four non-degenerate image/ground
+correspondences.
+
 ## Dependencies
 
-The base dependency set is CPU-capable and headless: NumPy, ONNX Runtime,
-OpenCV Headless, and PyYAML. API, dashboard, and development tools are optional
-dependency groups. The initial ByteTrack adapter will be selected and isolated
-in the tracking phase so the base runtime does not acquire PyTorch or a second
-OpenCV distribution.
+The base dependency set is CPU-capable: NumPy, ONNX Runtime, OpenCV Headless,
+PyYAML, and the maintained `trackers` package. API, dashboard, and development
+tools are optional dependency groups. ByteTrack does not use BoT-SORT, OSNet,
+or PyTorch in this phase. The current `trackers` package itself declares the
+regular OpenCV distribution, although this application uses no GUI APIs and
+remains headless at runtime.
 
 Python 3.10 or newer is required.
 
@@ -90,6 +133,46 @@ python -m app.detection.cli input.jpg --output outputs/detected.jpg
 python -m app.detection.cli input.mp4 --output outputs/detected.mp4
 ```
 
+Run person tracking with annotated IDs and trajectories:
+
+```bash
+python -m app.tracking.cli input.mp4 --output outputs/tracked.mp4
+```
+
+Count confirmed tracked people in every video frame. Without a camera YAML,
+the entire image is used as one occupancy zone. The command writes both an
+annotated MP4 and a CSV containing one row per frame. `confirmed_humans` is the
+visible tracked-person count; polygon columns count only foot points inside each
+configured zone:
+
+```bash
+python -m app.analytics.cli data/human.mp4 \
+  --output outputs/human_counted.mp4 \
+  --counts-csv outputs/human_counts.csv
+```
+
+To report configured polygon occupancy and line totals instead:
+
+```bash
+python -m app.analytics.cli data/human.mp4 \
+  --camera-config configs/cameras/example_lobby.yaml \
+  --output outputs/human_counted.mp4 \
+  --counts-csv outputs/human_counts.csv
+```
+
+Trajectory trails are shown by default. Hide only the trails while continuing
+to collect trajectory history for later analytics:
+
+```bash
+python -m app.tracking.cli input.mp4 \
+  --output outputs/tracked.mp4 \
+  --no-trajectories
+```
+
+The tracking CLI reports average detection, tracking, and total-frame time.
+Tracker activation threshold, lost-track buffer, IoU match threshold, and
+history size are configured under `tracker` in `configs/default.yaml`.
+
 For a bounded smoke run:
 
 ```bash
@@ -111,6 +194,32 @@ are available through `VIDEO_ANALYTICS_LOG_LEVEL`,
 `VIDEO_ANALYTICS_OUTPUT_DIR`, `VIDEO_ANALYTICS_DATABASE_PATH`,
 `VIDEO_ANALYTICS_DETECTOR_MODEL`, and comma-separated
 `VIDEO_ANALYTICS_ONNX_PROVIDERS`.
+
+## Camera geometry configuration
+
+The complete example at `configs/cameras/example_lobby.yaml` includes
+occupancy and restricted polygons, a directed line, queue/service geometry,
+heatmap settings, and a four-point calibration. Load it independently of the
+application settings:
+
+```bash
+python -c "from app.geometry import load_camera_config; print(load_camera_config('configs/cameras/example_lobby.yaml'))"
+```
+
+To draw geometry on a reference image and save validated YAML:
+
+```bash
+python scripts/configure_camera.py data/human.jpg \
+  --camera-id lobby_east \
+  --name "East lobby" \
+  --source data/lobby.mp4 \
+  --output configs/cameras/lobby_east.yaml
+```
+
+Select a polygon, two line endpoints, an optional queue service point, and at
+least four calibration image points. Each calibration click prompts for the
+matching ground-plane coordinate. The selector uses optional system Tk; it is
+not imported by the headless runtime.
 
 ## Supported model
 
@@ -138,7 +247,7 @@ rejects it with a clear shape error instead of guessing.
 
 ## Planned commands
 
-The following interfaces are planned and are not available in Phase 1:
+The following interfaces are planned and are not available in Phase 5:
 
 ```bash
 video-analytics api --config configs/default.yaml

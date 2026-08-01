@@ -13,6 +13,7 @@ dependencies = [
     "onnxruntime>=1.17,<2",
     "opencv-python-headless>=4.8,<5",
     "PyYAML>=6,<7",
+    "trackers>=2.5,<2.6",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +30,8 @@ dev = [
 
 [project.scripts]
 video-analytics-detect = "app.detection.cli:main"
+video-analytics-track = "app.tracking.cli:main"
+video-analytics-count = "app.analytics.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

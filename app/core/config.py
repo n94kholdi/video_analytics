@@ -32,6 +32,10 @@ class AppSettings:
     onnx_providers: tuple[str, ...]
     detector_confidence_threshold: float
     detector_iou_threshold: float
+    tracker_activation_threshold: float
+    tracker_lost_track_buffer: int
+    tracker_match_threshold: float
+    tracker_history_size: int
     detector_model: Path | None = None
 
     @classmethod
@@ -47,6 +51,7 @@ class AppSettings:
         paths = _mapping(values, "paths")
         onnx = _mapping(values, "onnx")
         detector = _mapping(values, "detector")
+        tracker = _mapping(values, "tracker")
 
         name = _non_empty_string(app.get("name"), "app.name")
         environment = _non_empty_string(
@@ -98,6 +103,22 @@ class AppSettings:
             detector.get("iou_threshold"),
             "detector.iou_threshold",
         )
+        tracker_activation_threshold = _threshold(
+            tracker.get("activation_threshold"),
+            "tracker.activation_threshold",
+        )
+        tracker_lost_track_buffer = _positive_int(
+            tracker.get("lost_track_buffer"),
+            "tracker.lost_track_buffer",
+        )
+        tracker_match_threshold = _threshold(
+            tracker.get("match_threshold"),
+            "tracker.match_threshold",
+        )
+        tracker_history_size = _positive_int(
+            tracker.get("history_size"),
+            "tracker.history_size",
+        )
 
         return cls(
             name=name,
@@ -108,6 +129,10 @@ class AppSettings:
             onnx_providers=providers,
             detector_confidence_threshold=confidence_threshold,
             detector_iou_threshold=iou_threshold,
+            tracker_activation_threshold=tracker_activation_threshold,
+            tracker_lost_track_buffer=tracker_lost_track_buffer,
+            tracker_match_threshold=tracker_match_threshold,
+            tracker_history_size=tracker_history_size,
             detector_model=detector_model,
         )
 
@@ -219,6 +244,12 @@ def _threshold(value: Any, field_name: str, *, label: str = "threshold") -> floa
     if not 0.0 <= result <= 1.0:
         raise ConfigError(f"{field_name} {label} must be between 0 and 1")
     return result
+
+
+def _positive_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{field_name} must be a positive integer")
+    return value
 
 
 def _resolve_path(value: str, base_dir: Path) -> Path:

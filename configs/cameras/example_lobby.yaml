@@ -1,0 +1,59 @@
+camera:
+  id: lobby_east
+  name: East lobby camera
+  source: data/lobby.mp4
+
+detector:
+  confidence_threshold: 0.4
+  iou_threshold: 0.7
+
+tracker:
+  activation_threshold: 0.4
+  lost_track_buffer: 30
+  match_threshold: 0.3
+
+analytics:
+  enabled:
+    - occupancy
+    - line_counting
+    - restricted_area
+    - heatmap
+    - queue
+    - speed
+  occupancy_zones:
+    - id: lobby_floor
+      points: [[0.05, 0.20], [0.95, 0.20], [0.95, 0.95], [0.05, 0.95]]
+  restricted_zones:
+    - id: staff_door
+      points: [[0.72, 0.18], [0.94, 0.18], [0.94, 0.48], [0.72, 0.48]]
+  counting_lines:
+    - id: main_entrance
+      start: [0.18, 0.62]
+      end: [0.68, 0.62]
+      positive_label: entry
+      negative_label: exit
+      hysteresis: 0.01
+  queues:
+    - id: reception_queue
+      polygon: [[0.12, 0.42], [0.54, 0.42], [0.61, 0.90], [0.08, 0.90]]
+      service_point:
+        point: [0.50, 0.45]
+        label: reception desk
+      overflow_threshold: 6
+
+heatmap:
+  region: [[0.05, 0.20], [0.95, 0.20], [0.95, 0.95], [0.05, 0.95]]
+  grid_size: [64, 36]
+
+calibration:
+  image_points: [[0.20, 0.35], [0.80, 0.35], [0.90, 0.90], [0.10, 0.90]]
+  ground_points: [[0.0, 0.0], [8.0, 0.0], [8.0, 12.0], [0.0, 12.0]]
+  ground_unit: metres
+
+outputs:
+  annotated_video: outputs/lobby_east_annotated.mp4
+  events_jsonl: outputs/lobby_east_events.jsonl
+
+visualization:
+  enabled: true
+  draw_geometry: true
