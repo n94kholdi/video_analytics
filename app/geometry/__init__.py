@@ -3,6 +3,7 @@
 
 from app.geometry.calibration import GroundProjection, ImageToGroundProjector
 from app.geometry.config import (
+    ActiveSchedule,
     AnalyticsConfig,
     CalibrationConfig,
     CameraConfig,
@@ -14,6 +15,7 @@ from app.geometry.config import (
     OutputConfig,
     PolygonZone,
     QueueRegion,
+    RestrictedZone,
     ServicePoint,
     TrackerConfig,
     VisualizationConfig,
@@ -32,6 +34,7 @@ from app.geometry.primitives import (
 )
 
 __all__ = [
+    "ActiveSchedule",
     "AnalyticsConfig",
     "CalibrationConfig",
     "CameraConfig",
@@ -47,6 +50,7 @@ __all__ = [
     "OutputConfig",
     "PolygonZone",
     "QueueRegion",
+    "RestrictedZone",
     "ServicePoint",
     "TrackerConfig",
     "VisualizationConfig",

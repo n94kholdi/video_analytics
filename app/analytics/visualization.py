@@ -7,6 +7,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from app.analytics.counting import CountingSnapshot
+from app.analytics.restricted_area import RestrictedAreaSnapshot
 
 
 def annotate_people_counts(
@@ -14,6 +15,7 @@ def annotate_people_counts(
     snapshot: CountingSnapshot,
     *,
     confirmed_humans: int | None = None,
+    restricted_snapshot: RestrictedAreaSnapshot | None = None,
     copy: bool = True,
 ) -> NDArray[np.uint8]:
     """Add visible-track, zone occupancy, and line totals to a frame."""
@@ -31,6 +33,14 @@ def annotate_people_counts(
             for item in snapshot.lines
         ),
     ]
+    if restricted_snapshot is not None:
+        rows.extend(
+            (
+                f"restricted {item.zone_id}: current {item.current_tracks} "
+                f"entries {item.cumulative_entries} exits {item.cumulative_exits}"
+            )
+            for item in restricted_snapshot.zones
+        )
     if not rows:
         rows.append("people counting: no configured geometry")
     height, width = annotated.shape[:2]

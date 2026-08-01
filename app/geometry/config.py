@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 import yaml
@@ -71,6 +73,119 @@ class PolygonZone:
         zone_id = _string(mapping.get("id"), f"{field}.id")
         points = _point_list(mapping.get("points"), f"{field}.points")
         return cls(zone_id, points)
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveSchedule:
+    """Optional weekly wall-clock schedule for a restricted zone."""
+
+    start_minute: int
+    end_minute: int
+    weekdays: tuple[int, ...] = tuple(range(7))
+    timezone: str = "UTC"
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.start_minute < 24 * 60:
+            raise CameraConfigError("active schedule start must be a valid HH:MM time")
+        if not 0 <= self.end_minute < 24 * 60:
+            raise CameraConfigError("active schedule end must be a valid HH:MM time")
+        if self.start_minute == self.end_minute:
+            raise CameraConfigError("active schedule start and end must differ")
+        if not self.weekdays or len(set(self.weekdays)) != len(self.weekdays):
+            raise CameraConfigError(
+                "active schedule weekdays must be non-empty and unique"
+            )
+        if any(isinstance(day, bool) or not 0 <= day <= 6 for day in self.weekdays):
+            raise CameraConfigError("active schedule weekdays must be integers from 0 to 6")
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise CameraConfigError(
+                f"active schedule timezone is unknown: {self.timezone}"
+            ) from exc
+
+    @classmethod
+    def from_mapping(cls, value: Any, field: str) -> "ActiveSchedule":
+        mapping = _mapping_value(value, field)
+        weekdays_value = mapping.get("weekdays", list(range(7)))
+        if not isinstance(weekdays_value, list):
+            raise CameraConfigError(f"{field}.weekdays must be a list")
+        weekdays = tuple(
+            _weekday(day, f"{field}.weekdays[{index}]")
+            for index, day in enumerate(weekdays_value)
+        )
+        return cls(
+            _clock_minute(mapping.get("start"), f"{field}.start"),
+            _clock_minute(mapping.get("end"), f"{field}.end"),
+            weekdays,
+            _string(mapping.get("timezone", "UTC"), f"{field}.timezone"),
+        )
+
+    def is_active(self, timestamp: float) -> bool:
+        """Evaluate a Unix timestamp, including schedules spanning midnight."""
+
+        local = datetime.fromtimestamp(timestamp, ZoneInfo(self.timezone))
+        minute = local.hour * 60 + local.minute
+        if self.start_minute <= self.end_minute:
+            return (
+                local.weekday() in self.weekdays
+                and self.start_minute <= minute < self.end_minute
+            )
+        if minute >= self.start_minute:
+            return local.weekday() in self.weekdays
+        previous_day = (local.weekday() - 1) % 7
+        return previous_day in self.weekdays and minute < self.end_minute
+
+
+@dataclass(frozen=True, slots=True)
+class RestrictedZone:
+    """Restricted polygon and temporal intrusion thresholds."""
+
+    zone_id: str
+    points: tuple[NormalizedPoint, ...]
+    entry_dwell_seconds: float = 1.0
+    exit_grace_seconds: float = 1.0
+    alert_cooldown_seconds: float = 30.0
+    active_schedule: ActiveSchedule | None = None
+
+    def __post_init__(self) -> None:
+        PolygonZone(self.zone_id, self.points)
+        for value, field_name in (
+            (self.entry_dwell_seconds, "entry_dwell_seconds"),
+            (self.exit_grace_seconds, "exit_grace_seconds"),
+            (self.alert_cooldown_seconds, "alert_cooldown_seconds"),
+        ):
+            if not math.isfinite(value) or value < 0:
+                raise CameraConfigError(
+                    f"restricted zone {field_name} must be non-negative"
+                )
+
+    def pixel_points(self, frame_size: tuple[int, int]) -> tuple[tuple[float, float], ...]:
+        return tuple(point.to_pixels(frame_size) for point in self.points)
+
+    @classmethod
+    def from_mapping(cls, value: Any, field: str) -> "RestrictedZone":
+        mapping = _mapping_value(value, field)
+        schedule = mapping.get("active_schedule")
+        return cls(
+            _string(mapping.get("id"), f"{field}.id"),
+            _point_list(mapping.get("points"), f"{field}.points"),
+            _number(
+                mapping.get("entry_dwell_seconds", 1.0),
+                f"{field}.entry_dwell_seconds",
+            ),
+            _number(
+                mapping.get("exit_grace_seconds", 1.0),
+                f"{field}.exit_grace_seconds",
+            ),
+            _number(
+                mapping.get("alert_cooldown_seconds", 30.0),
+                f"{field}.alert_cooldown_seconds",
+            ),
+            ActiveSchedule.from_mapping(schedule, f"{field}.active_schedule")
+            if schedule is not None
+            else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +335,7 @@ class AnalyticsConfig:
 
     enabled: tuple[str, ...]
     occupancy_zones: tuple[PolygonZone, ...] = ()
-    restricted_zones: tuple[PolygonZone, ...] = ()
+    restricted_zones: tuple[RestrictedZone, ...] = ()
     counting_lines: tuple[CountingLine, ...] = ()
     queues: tuple[QueueRegion, ...] = ()
 
@@ -253,7 +368,7 @@ class AnalyticsConfig:
         return cls(
             enabled,
             _models(mapping.get("occupancy_zones", []), "analytics.occupancy_zones", PolygonZone),
-            _models(mapping.get("restricted_zones", []), "analytics.restricted_zones", PolygonZone),
+            _models(mapping.get("restricted_zones", []), "analytics.restricted_zones", RestrictedZone),
             _models(mapping.get("counting_lines", []), "analytics.counting_lines", CountingLine),
             _models(mapping.get("queues", []), "analytics.queues", QueueRegion),
         )
@@ -390,7 +505,7 @@ class CameraConfig:
             "analytics": {
                 "enabled": list(self.analytics.enabled),
                 "occupancy_zones": [_zone_mapping(item) for item in self.analytics.occupancy_zones],
-                "restricted_zones": [_zone_mapping(item) for item in self.analytics.restricted_zones],
+                "restricted_zones": [_restricted_zone_mapping(item) for item in self.analytics.restricted_zones],
                 "counting_lines": [_line_mapping(item) for item in self.analytics.counting_lines],
                 "queues": [_queue_mapping(item) for item in self.analytics.queues],
             },
@@ -504,6 +619,35 @@ def _boolean(value: Any, field: str) -> bool:
     return value
 
 
+def _clock_minute(value: Any, field: str) -> int:
+    if not isinstance(value, str):
+        raise CameraConfigError(f"{field} must use HH:MM")
+    parts = value.split(":")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        raise CameraConfigError(f"{field} must use HH:MM")
+    hour, minute = (int(part) for part in parts)
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise CameraConfigError(f"{field} must use HH:MM")
+    return hour * 60 + minute
+
+
+def _weekday(value: Any, field: str) -> int:
+    names = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+    if isinstance(value, str) and value.lower() in names:
+        return names[value.lower()]
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 6:
+        return value
+    raise CameraConfigError(f"{field} must be a weekday name or integer from 0 to 6")
+
+
 def _validate_threshold(value: float, field: str) -> None:
     if not 0.0 <= value <= 1.0:
         raise CameraConfigError(f"{field} must be between 0 and 1")
@@ -515,6 +659,25 @@ def _points_mapping(points: Sequence[NormalizedPoint] | None) -> list[list[float
 
 def _zone_mapping(zone: PolygonZone) -> dict[str, Any]:
     return {"id": zone.zone_id, "points": _points_mapping(zone.points)}
+
+
+def _restricted_zone_mapping(zone: RestrictedZone) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "id": zone.zone_id,
+        "points": _points_mapping(zone.points),
+        "entry_dwell_seconds": zone.entry_dwell_seconds,
+        "exit_grace_seconds": zone.exit_grace_seconds,
+        "alert_cooldown_seconds": zone.alert_cooldown_seconds,
+    }
+    if zone.active_schedule is not None:
+        schedule = zone.active_schedule
+        result["active_schedule"] = {
+            "start": f"{schedule.start_minute // 60:02d}:{schedule.start_minute % 60:02d}",
+            "end": f"{schedule.end_minute // 60:02d}:{schedule.end_minute % 60:02d}",
+            "weekdays": list(schedule.weekdays),
+            "timezone": schedule.timezone,
+        }
+    return result
 
 
 def _line_mapping(line: CountingLine) -> dict[str, Any]:

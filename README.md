@@ -4,10 +4,10 @@ This is the isolated application scaffold for a medium-complexity, video-based
 people analytics MVP. Existing computer-vision experiments and model weights
 remain outside this directory and are treated as read-only inputs.
 
-Phase 5 adds current occupancy and directional entry/exit counting on top of
-the validated camera geometry and shared tracker observations. Restricted-area,
-heatmap, queue, persistence, API, and dashboard behavior remain intentionally
-unimplemented.
+Phase 6 adds restricted-area detection on top of shared confirmed tracker
+observations. Heatmap, queue, database, API, and dashboard behavior remain
+intentionally unimplemented; event persistence is currently limited to a
+shared sink interface and JSONL output.
 
 ## Planned scope
 
@@ -94,6 +94,28 @@ both sides of the line. A track must move from one stable side to the other and
 cross the configured finite segment before it is counted. Tracks on the line or
 moving only within the dead band do not increment totals.
 
+Restricted-area detection is separated into:
+
+- `app.analytics.restricted_area`: foot-point membership, independent
+  camera/track/zone state, entry dwell, exit grace, cooldown, and reset
+- `app.analytics.restricted_visualization`: named zone status plus pending and
+  confirmed intrusion overlays
+- `app.storage.EventSink`: the persistence boundary used by analytics
+- `app.storage.JsonlEventSink`: append-only persistence for shared `Event`
+  envelopes; SQLite remains a later phase
+
+Each restricted zone supports `entry_dwell_seconds`, `exit_grace_seconds`, and
+`alert_cooldown_seconds`. Entry and exit lifecycle events remain visible for a
+transient crossing, while only a dwell-qualified
+`restricted_area_confirmed` event is the cooldown-controlled alert. During a
+short missing-observation or outside period, prior state is kept until the exit
+grace expires.
+
+An optional `active_schedule` accepts `start`/`end` in `HH:MM`, weekday names
+or integers (`0` is Monday), and an IANA timezone. Schedule evaluation requires
+Unix timestamps. Recorded-video source-relative timestamps should leave the
+schedule unset unless the caller supplies an epoch time basis.
+
 Normalized `(0, 0)` and `(1, 1)` map to inclusive pixel corners `(0, 0)` and
 `(width - 1, height - 1)`. Ground projection is only available through a
 validated calibration containing at least four non-degenerate image/ground
@@ -159,6 +181,10 @@ python -m app.analytics.cli data/human.mp4 \
   --output outputs/human_counted.mp4 \
   --counts-csv outputs/human_counts.csv
 ```
+
+The configured run also processes restricted zones, draws their current status,
+and appends intrusion events to `outputs.events_jsonl`. Override that destination
+with `--events-jsonl`; no restricted zones are assumed without a camera YAML.
 
 Trajectory trails are shown by default. Hide only the trails while continuing
 to collect trajectory history for later analytics:
@@ -247,7 +273,7 @@ rejects it with a clear shape error instead of guessing.
 
 ## Planned commands
 
-The following interfaces are planned and are not available in Phase 5:
+The following interfaces are planned and are not available in Phase 6:
 
 ```bash
 video-analytics api --config configs/default.yaml

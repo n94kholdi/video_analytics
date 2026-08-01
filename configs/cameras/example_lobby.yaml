@@ -23,15 +23,20 @@ analytics:
   occupancy_zones:
     - id: lobby_floor
       points: [[0.05, 0.20], [0.95, 0.20], [0.95, 0.95], [0.05, 0.95]]
+    - id: staff_door_current
+      points: [[0.72, 0.18], [0.94, 0.18], [0.94, 0.60], [0.72, 0.60]]
   restricted_zones:
     - id: staff_door
-      points: [[0.72, 0.18], [0.94, 0.18], [0.94, 0.48], [0.72, 0.48]]
+      points: [[0.72, 0.18], [0.94, 0.18], [0.94, 0.60], [0.72, 0.60]]
+      entry_dwell_seconds: 0.0
+      exit_grace_seconds: 0.5
+      alert_cooldown_seconds: 30.0
   counting_lines:
     - id: main_entrance
       start: [0.18, 0.62]
       end: [0.68, 0.62]
-      positive_label: entry
-      negative_label: exit
+      positive_label: exit
+      negative_label: entry
       hysteresis: 0.01
   queues:
     - id: reception_queue

@@ -80,3 +80,54 @@ def test_out_of_range_line_hysteresis_is_rejected() -> None:
 
     with pytest.raises(CameraConfigError, match="hysteresis must be between"):
         CameraConfig.from_mapping(mapping)
+
+
+def test_restricted_zone_thresholds_and_schedule_are_parsed() -> None:
+    mapping = {
+        "camera": {"id": "cam", "name": "Camera", "source": 0},
+        "analytics": {
+            "enabled": ["restricted_area"],
+            "restricted_zones": [
+                {
+                    "id": "secure",
+                    "points": [[0, 0], [1, 0], [1, 1], [0, 1]],
+                    "entry_dwell_seconds": 2.5,
+                    "exit_grace_seconds": 0.75,
+                    "alert_cooldown_seconds": 60,
+                    "active_schedule": {
+                        "start": "22:00",
+                        "end": "06:00",
+                        "weekdays": ["monday", "tuesday"],
+                        "timezone": "UTC",
+                    },
+                }
+            ],
+        },
+    }
+
+    zone = CameraConfig.from_mapping(mapping).analytics.restricted_zones[0]
+
+    assert zone.entry_dwell_seconds == 2.5
+    assert zone.exit_grace_seconds == 0.75
+    assert zone.alert_cooldown_seconds == 60
+    assert zone.active_schedule is not None
+    assert zone.active_schedule.weekdays == (0, 1)
+
+
+def test_negative_restricted_zone_threshold_is_rejected() -> None:
+    mapping = {
+        "camera": {"id": "cam", "name": "Camera", "source": 0},
+        "analytics": {
+            "enabled": ["restricted_area"],
+            "restricted_zones": [
+                {
+                    "id": "secure",
+                    "points": [[0, 0], [1, 0], [1, 1], [0, 1]],
+                    "entry_dwell_seconds": -1,
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(CameraConfigError, match="entry_dwell_seconds.*non-negative"):
+        CameraConfig.from_mapping(mapping)
