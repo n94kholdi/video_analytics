@@ -4,10 +4,10 @@ This is the isolated application scaffold for a medium-complexity, video-based
 people analytics MVP. Existing computer-vision experiments and model weights
 remain outside this directory and are treated as read-only inputs.
 
-Phase 6 adds restricted-area detection on top of shared confirmed tracker
-observations. Heatmap, queue, database, API, and dashboard behavior remain
-intentionally unimplemented; event persistence is currently limited to a
-shared sink interface and JSONL output.
+Phase 7 adds bounded movement occupancy and dwell heatmaps on top of shared
+confirmed tracker foot points. Queue, speed, database, API, and dashboard
+behavior remain intentionally unimplemented; event persistence is currently
+limited to a shared sink interface and JSONL output.
 
 ## Planned scope
 
@@ -111,6 +111,30 @@ transient crossing, while only a dwell-qualified
 short missing-observation or outside period, prior state is kept until the exit
 grace expires.
 
+Movement heatmaps are separated into:
+
+- `app.analytics.heatmap`: image-grid mapping, optional calibrated ground-grid
+  mapping, sample-count occupancy, elapsed-seconds dwell, bounded track state,
+  reset/tumbling-window aggregation, and CSV/PNG export
+- `HeatmapSnapshot.occupancy`: number of confirmed position samples per cell
+- `HeatmapSnapshot.dwell_seconds`: timestamp-derived time assigned to the
+  previous confirmed position cell
+
+These are people-movement analytics heatmaps, not detector feature or neural
+network activation heatmaps. Long gaps are not treated as dwell: intervals over
+`max_sample_gap_seconds` are discarded, and per-track state is evicted after
+`track_idle_seconds`. `aggregation_window_seconds` creates constant-memory
+tumbling windows; setting it to `null` retains run totals until explicit reset.
+Calibration creates a parallel ground-plane grid, using configured
+`ground_bounds` or the calibration correspondence extents. Missing calibration
+leaves image heatmaps available and reports a clear ground-unavailable reason.
+Rendering covers the complete configured heatmap region: zero-value cells use
+the low (blue) end of the selected color map and increasingly occupied cells
+progress through green/yellow/orange to red. `smoothing_sigma_cells` spreads
+each foot-point cell into a readable density region without changing the exact
+numeric CSV values. Set the heatmap `region` to the normalized full-frame
+rectangle `[[0, 0], [1, 0], [1, 1], [0, 1]]` to color the entire image.
+
 An optional `active_schedule` accepts `start`/`end` in `HH:MM`, weekday names
 or integers (`0` is Monday), and an IANA timezone. Schedule evaluation requires
 Unix timestamps. Recorded-video source-relative timestamps should leave the
@@ -185,6 +209,30 @@ python -m app.analytics.cli data/human.mp4 \
 The configured run also processes restricted zones, draws their current status,
 and appends intrusion events to `outputs.events_jsonl`. Override that destination
 with `--events-jsonl`; no restricted zones are assumed without a camera YAML.
+
+Heatmap processing is runtime opt-in even when the camera YAML lists the module.
+Pass `--enable-heatmap` to produce evolving occupancy and dwell overlay videos,
+plus separate final CSV grids, colorized PNGs, and first-frame overlays.
+Ground-plane CSVs and PNGs are also produced when calibration exists. Use the
+camera YAML's `outputs.heatmap_directory`, allow the default output directory,
+or override it explicitly:
+
+```bash
+python -m app.analytics.cli data/human.mp4 \
+  --camera-config configs/cameras/example_lobby.yaml \
+  --enable-heatmap \
+  --heatmap-dir outputs/human_heatmaps
+```
+
+Without `--enable-heatmap`, no heatmap state is accumulated and no heatmap
+files or videos are created. Videos are streamed frame by frame, so enabling
+them does not retain an unbounded collection of video frames in memory.
+
+Grid sizes, aggregation window, maximum sample gap, idle-state timeout, color
+map, overlay opacity, and rendering smoothing are configured under `heatmap`.
+CSV rows follow image
+or ground Y and columns follow X. Image-space PNG and overlay dimensions match
+the source frame; ground PNG dimensions match the configured ground grid.
 
 Trajectory trails are shown by default. Hide only the trails while continuing
 to collect trajectory history for later analytics:
@@ -273,7 +321,7 @@ rejects it with a clear shape error instead of guessing.
 
 ## Planned commands
 
-The following interfaces are planned and are not available in Phase 6:
+The following interfaces are planned and are not available in Phase 7:
 
 ```bash
 video-analytics api --config configs/default.yaml

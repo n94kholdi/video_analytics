@@ -13,6 +13,12 @@ from typing import Sequence
 import cv2
 
 from app.analytics.counting import CameraCountingConfig, PeopleCounter
+from app.analytics.heatmap import (
+    HeatmapExportPaths,
+    HeatmapVideoWriter,
+    MovementHeatmaps,
+    export_heatmap_snapshot,
+)
 from app.analytics.restricted_area import (
     CameraRestrictedAreaConfig,
     RestrictedAreaDetector,
@@ -47,6 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, help="annotated MP4 path")
     parser.add_argument("--counts-csv", type=Path, help="per-frame count CSV path")
     parser.add_argument(
+        "--enable-heatmap",
+        action="store_true",
+        help="enable evolving occupancy/dwell videos and final heatmap exports",
+    )
+    parser.add_argument(
+        "--heatmap-dir",
+        type=Path,
+        help="heatmap output directory (requires --enable-heatmap)",
+    )
+    parser.add_argument(
         "--events-jsonl",
         type=Path,
         help="append restricted-area events as JSONL (camera YAML output is the default)",
@@ -65,6 +81,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.max_frames is not None and args.max_frames <= 0:
         raise ValueError("--max-frames must be positive")
+    if args.heatmap_dir is not None and not args.enable_heatmap:
+        raise ValueError("--heatmap-dir requires --enable-heatmap")
 
     settings = load_settings(args.config)
     source = args.source.expanduser().resolve()
@@ -123,6 +141,27 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     counter.reset()  # Explicit processing-run boundary.
     restricted.reset()
+    heatmaps = None
+    heatmap_directory = None
+    heatmap_settings = camera_config.heatmap if camera_config is not None else None
+    if args.enable_heatmap:
+        heatmaps = (
+            MovementHeatmaps.from_camera_config(camera_config, (width, height))
+            if camera_config is not None
+            else MovementHeatmaps.for_image(camera_counting.camera_id, (width, height))
+        )
+        configured_directory = (
+            camera_config.outputs.heatmap_directory
+            if camera_config is not None
+            else None
+        )
+        heatmap_directory = (
+            args.heatmap_dir
+            or (Path(configured_directory) if configured_directory else None)
+            or settings.output_dir / f"{source.stem}_heatmaps"
+        )
+    if heatmaps is not None:
+        heatmaps.reset()
 
     output.parent.mkdir(parents=True, exist_ok=True)
     counts_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +171,28 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not writer.isOpened():
         capture.release()
         raise RuntimeError(f"OpenCV could not create output video: {output}")
+    heatmap_video_writer = None
+    if heatmaps is not None:
+        assert heatmap_directory is not None
+        color_map = heatmap_settings.color_map if heatmap_settings else "jet"
+        opacity = heatmap_settings.opacity if heatmap_settings else 0.55
+        smoothing_sigma = (
+            heatmap_settings.smoothing_sigma_cells if heatmap_settings else 1.0
+        )
+        try:
+            heatmap_video_writer = HeatmapVideoWriter(
+                heatmap_directory,
+                prefix=f"{heatmaps.camera_id}_image",
+                fps=fps,
+                frame_size=(width, height),
+                color_map=color_map,
+                opacity=opacity,
+                smoothing_sigma_cells=smoothing_sigma,
+            )
+        except Exception:
+            capture.release()
+            writer.release()
+            raise
 
     frames = 0
     events = 0
@@ -139,6 +200,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     maximum_confirmed = 0
     maximum_occupancy = 0
     total_ms = 0.0
+    reference_frame = None
     zone_ids = tuple(zone.zone_id for zone in camera_counting.occupancy_zones)
     restricted_zone_ids = tuple(zone.zone_id for zone in restricted_config.zones)
     try:
@@ -162,6 +224,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 readable, frame = capture.read()
                 if not readable:
                     break
+                if reference_frame is None:
+                    reference_frame = frame.copy()
                 started = perf_counter()
                 source_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
                 timestamp = (
@@ -186,6 +250,12 @@ def main(argv: Sequence[str] | None = None) -> None:
                     tracked.observations,
                     timestamp=timestamp,
                 )
+                if heatmaps is not None:
+                    heatmap_snapshot = heatmaps.update(
+                        tracked.observations, timestamp=timestamp
+                    )
+                    assert heatmap_video_writer is not None
+                    heatmap_video_writer.write(heatmap_snapshot.image, frame)
                 confirmed_humans = sum(
                     observation.confirmed for observation in tracked.observations
                 )
@@ -245,9 +315,50 @@ def main(argv: Sequence[str] | None = None) -> None:
     finally:
         capture.release()
         writer.release()
+        if heatmap_video_writer is not None:
+            heatmap_video_writer.close()
 
     if frames == 0:
         raise RuntimeError(f"video contained no readable frames: {source}")
+    heatmap_exports: dict[str, object] | None = None
+    if heatmaps is not None:
+        assert heatmap_directory is not None
+        assert heatmap_video_writer is not None
+        color_map = heatmap_settings.color_map if heatmap_settings else "jet"
+        opacity = heatmap_settings.opacity if heatmap_settings else 0.55
+        smoothing_sigma = (
+            heatmap_settings.smoothing_sigma_cells if heatmap_settings else 1.0
+        )
+        snapshot = heatmaps.snapshot()
+        image_exports = export_heatmap_snapshot(
+            snapshot.image,
+            heatmap_directory,
+            prefix=f"{heatmaps.camera_id}_image",
+            color_map=color_map,
+            opacity=opacity,
+            smoothing_sigma_cells=smoothing_sigma,
+            output_size=(width, height),
+            reference_frame=reference_frame,
+        )
+        heatmap_exports = {
+            "image": _export_paths(image_exports),
+            "videos": {
+                "occupancy": str(heatmap_video_writer.paths.occupancy.resolve()),
+                "dwell": str(heatmap_video_writer.paths.dwell.resolve()),
+            },
+            "ground": None,
+            "ground_unavailable_reason": snapshot.ground_unavailable_reason,
+        }
+        if snapshot.ground is not None:
+            ground_exports = export_heatmap_snapshot(
+                snapshot.ground,
+                heatmap_directory,
+                prefix=f"{heatmaps.camera_id}_ground",
+                color_map=color_map,
+                opacity=opacity,
+                smoothing_sigma_cells=smoothing_sigma,
+            )
+            heatmap_exports["ground"] = _export_paths(ground_exports)
     print(
         json.dumps(
             {
@@ -262,6 +373,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "average_total_frame_ms": total_ms / frames,
                 "annotated_video": str(output.resolve()),
                 "per_frame_counts_csv": str(counts_csv.resolve()),
+                "movement_heatmaps": heatmap_exports,
             },
             indent=2,
         )
@@ -297,6 +409,22 @@ def _restricted_config(
     if camera_config is not None:
         return CameraRestrictedAreaConfig.from_camera_config(camera_config, frame_size)
     return CameraRestrictedAreaConfig(default_camera_id, frame_size)
+
+
+def _export_paths(paths: HeatmapExportPaths) -> dict[str, str | None]:
+    """Convert a heatmap export result to the CLI's JSON-safe path mapping."""
+
+    return {
+        name: str(value.resolve()) if value is not None else None
+        for name, value in (
+            ("occupancy_grid", paths.occupancy_grid),
+            ("dwell_grid", paths.dwell_grid),
+            ("occupancy_image", paths.occupancy_image),
+            ("dwell_image", paths.dwell_image),
+            ("occupancy_overlay", paths.occupancy_overlay),
+            ("dwell_overlay", paths.dwell_overlay),
+        )
+    }
 
 
 if __name__ == "__main__":

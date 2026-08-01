@@ -398,8 +398,18 @@ class TrackerConfig:
 
 @dataclass(frozen=True, slots=True)
 class HeatmapConfig:
+    """Movement-heatmap grid, retention, and rendering settings."""
+
     region: tuple[NormalizedPoint, ...] | None = None
     grid_size: tuple[int, int] = (64, 36)
+    ground_grid_size: tuple[int, int] | None = None
+    ground_bounds: tuple[float, float, float, float] | None = None
+    aggregation_window_seconds: float | None = None
+    max_sample_gap_seconds: float = 2.0
+    track_idle_seconds: float = 30.0
+    color_map: str = "jet"
+    opacity: float = 0.55
+    smoothing_sigma_cells: float = 1.0
 
     def __post_init__(self) -> None:
         if self.region is not None:
@@ -411,12 +421,49 @@ class HeatmapConfig:
             isinstance(value, bool) or value <= 0 for value in self.grid_size
         ):
             raise CameraConfigError("heatmap.grid_size values must be positive integers")
+        if self.ground_grid_size is not None and (
+            len(self.ground_grid_size) != 2
+            or any(
+                isinstance(value, bool) or value <= 0
+                for value in self.ground_grid_size
+            )
+        ):
+            raise CameraConfigError(
+                "heatmap.ground_grid_size values must be positive integers"
+            )
+        if self.ground_bounds is not None:
+            min_x, min_y, max_x, max_y = self.ground_bounds
+            if not all(math.isfinite(value) for value in self.ground_bounds):
+                raise CameraConfigError("heatmap.ground_bounds must be finite")
+            if max_x <= min_x or max_y <= min_y:
+                raise CameraConfigError(
+                    "heatmap.ground_bounds must be [min_x, min_y, max_x, max_y]"
+                )
+        for value, field_name in (
+            (self.aggregation_window_seconds, "aggregation_window_seconds"),
+            (self.max_sample_gap_seconds, "max_sample_gap_seconds"),
+            (self.track_idle_seconds, "track_idle_seconds"),
+        ):
+            if value is not None and (not math.isfinite(value) or value <= 0):
+                raise CameraConfigError(f"heatmap.{field_name} must be positive")
+        if not self.color_map.strip():
+            raise CameraConfigError("heatmap.color_map must be non-empty")
+        if not math.isfinite(self.opacity) or not 0.0 <= self.opacity <= 1.0:
+            raise CameraConfigError("heatmap.opacity must be between 0 and 1")
+        if (
+            not math.isfinite(self.smoothing_sigma_cells)
+            or self.smoothing_sigma_cells < 0
+        ):
+            raise CameraConfigError(
+                "heatmap.smoothing_sigma_cells must be non-negative"
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class OutputConfig:
     annotated_video: str | None = None
     events_jsonl: str | None = None
+    heatmap_directory: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +507,21 @@ class CameraConfig:
         grid = heatmap.get("grid_size", [64, 36])
         if not isinstance(grid, list) or len(grid) != 2:
             raise CameraConfigError("heatmap.grid_size must contain width and height")
+        ground_grid = heatmap.get("ground_grid_size")
+        if ground_grid is not None and (
+            not isinstance(ground_grid, list) or len(ground_grid) != 2
+        ):
+            raise CameraConfigError(
+                "heatmap.ground_grid_size must contain width and height"
+            )
+        ground_bounds_value = heatmap.get("ground_bounds")
+        if ground_bounds_value is not None and (
+            not isinstance(ground_bounds_value, list)
+            or len(ground_bounds_value) != 4
+        ):
+            raise CameraConfigError(
+                "heatmap.ground_bounds must contain min_x, min_y, max_x, max_y"
+            )
         region_value = heatmap.get("region")
         return cls(
             _string(camera.get("id"), "camera.id"),
@@ -481,6 +543,36 @@ class CameraConfig:
                     _positive_int(grid[0], "heatmap.grid_size[0]"),
                     _positive_int(grid[1], "heatmap.grid_size[1]"),
                 ),
+                (
+                    _positive_int(ground_grid[0], "heatmap.ground_grid_size[0]"),
+                    _positive_int(ground_grid[1], "heatmap.ground_grid_size[1]"),
+                )
+                if ground_grid is not None
+                else None,
+                tuple(
+                    _number(value, f"heatmap.ground_bounds[{index}]")
+                    for index, value in enumerate(ground_bounds_value)
+                )
+                if ground_bounds_value is not None
+                else None,
+                _optional_positive_number(
+                    heatmap.get("aggregation_window_seconds"),
+                    "heatmap.aggregation_window_seconds",
+                ),
+                _number(
+                    heatmap.get("max_sample_gap_seconds", 2.0),
+                    "heatmap.max_sample_gap_seconds",
+                ),
+                _number(
+                    heatmap.get("track_idle_seconds", 30.0),
+                    "heatmap.track_idle_seconds",
+                ),
+                _string(heatmap.get("color_map", "jet"), "heatmap.color_map"),
+                _number(heatmap.get("opacity", 0.55), "heatmap.opacity"),
+                _number(
+                    heatmap.get("smoothing_sigma_cells", 1.0),
+                    "heatmap.smoothing_sigma_cells",
+                ),
             ),
             CalibrationConfig.from_mapping(values["calibration"])
             if values.get("calibration") is not None
@@ -488,6 +580,10 @@ class CameraConfig:
             OutputConfig(
                 _optional_string(outputs.get("annotated_video"), "outputs.annotated_video"),
                 _optional_string(outputs.get("events_jsonl"), "outputs.events_jsonl"),
+                _optional_string(
+                    outputs.get("heatmap_directory"),
+                    "outputs.heatmap_directory",
+                ),
             ),
             VisualizationConfig(
                 _boolean(visualization.get("enabled", True), "visualization.enabled"),
@@ -512,6 +608,18 @@ class CameraConfig:
             "heatmap": {
                 "region": _points_mapping(self.heatmap.region) if self.heatmap.region else None,
                 "grid_size": list(self.heatmap.grid_size),
+                "ground_grid_size": list(self.heatmap.ground_grid_size)
+                if self.heatmap.ground_grid_size
+                else None,
+                "ground_bounds": list(self.heatmap.ground_bounds)
+                if self.heatmap.ground_bounds
+                else None,
+                "aggregation_window_seconds": self.heatmap.aggregation_window_seconds,
+                "max_sample_gap_seconds": self.heatmap.max_sample_gap_seconds,
+                "track_idle_seconds": self.heatmap.track_idle_seconds,
+                "color_map": self.heatmap.color_map,
+                "opacity": self.heatmap.opacity,
+                "smoothing_sigma_cells": self.heatmap.smoothing_sigma_cells,
             },
             "outputs": asdict(self.outputs),
             "visualization": asdict(self.visualization),
@@ -604,6 +712,15 @@ def _number(value: Any, field: str) -> float:
         raise CameraConfigError(f"{field} must be a finite number") from exc
     if not math.isfinite(result):
         raise CameraConfigError(f"{field} must be a finite number")
+    return result
+
+
+def _optional_positive_number(value: Any, field: str) -> float | None:
+    if value is None:
+        return None
+    result = _number(value, field)
+    if result <= 0:
+        raise CameraConfigError(f"{field} must be positive")
     return result
 
 

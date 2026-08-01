@@ -19,16 +19,38 @@ from app.analytics.restricted_area import (
     RestrictedZoneStatus,
 )
 from app.analytics.restricted_visualization import annotate_restricted_areas
+from app.analytics.heatmap import (
+    HeatmapAccumulator,
+    HeatmapExportPaths,
+    HeatmapGrid,
+    HeatmapSnapshot,
+    HeatmapVideoPaths,
+    HeatmapVideoWriter,
+    MovementHeatmaps,
+    MovementHeatmapSnapshot,
+    colorize_heatmap,
+    export_heatmap_snapshot,
+    export_numeric_grid,
+    overlay_heatmap,
+)
 
 __all__ = [
     "CameraCountingConfig",
     "CameraRestrictedAreaConfig",
     "CountingResult",
     "CountingSnapshot",
+    "HeatmapAccumulator",
+    "HeatmapExportPaths",
+    "HeatmapGrid",
+    "HeatmapSnapshot",
+    "HeatmapVideoPaths",
+    "HeatmapVideoWriter",
     "LineCount",
     "IntrusionState",
     "IntrusionTrackStatus",
     "OccupancyCount",
+    "MovementHeatmaps",
+    "MovementHeatmapSnapshot",
     "PeopleCounter",
     "RestrictedAreaDetector",
     "RestrictedAreaResult",
@@ -36,4 +58,8 @@ __all__ = [
     "RestrictedZoneStatus",
     "annotate_people_counts",
     "annotate_restricted_areas",
+    "colorize_heatmap",
+    "export_heatmap_snapshot",
+    "export_numeric_grid",
+    "overlay_heatmap",
 ]
