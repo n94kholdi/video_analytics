@@ -255,7 +255,15 @@ def main(argv: Sequence[str] | None = None) -> None:
                         tracked.observations, timestamp=timestamp
                     )
                     assert heatmap_video_writer is not None
-                    heatmap_video_writer.write(heatmap_snapshot.image, frame)
+                    heatmap_video_writer.write(
+                        heatmap_snapshot.image,
+                        frame,
+                        counted_points=tuple(
+                            observation.foot_point
+                            for observation in tracked.observations
+                            if observation.confirmed
+                        ),
+                    )
                 confirmed_humans = sum(
                     observation.confirmed for observation in tracked.observations
                 )

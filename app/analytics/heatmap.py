@@ -440,8 +440,14 @@ class HeatmapVideoWriter:
         self.opacity = opacity
         self.smoothing_sigma_cells = smoothing_sigma_cells
 
-    def write(self, snapshot: HeatmapSnapshot, frame: np.ndarray) -> None:
-        """Render and immediately write one evolving state for each metric."""
+    def write(
+        self,
+        snapshot: HeatmapSnapshot,
+        frame: np.ndarray,
+        *,
+        counted_points: Sequence[Point] = (),
+    ) -> None:
+        """Render one state, optionally marking the exact counted foot points."""
 
         expected_width, expected_height = self.frame_size
         if frame.shape[:2] != (expected_height, expected_width):
@@ -463,13 +469,18 @@ class HeatmapVideoWriter:
         _draw_heatmap_label(
             occupancy_overlay,
             "OCCUPANCY HEATMAP - blue=0, red=most samples "
-            f"(cell max {int(snapshot.occupancy.max(initial=0))})",
+            f"(cell max {int(snapshot.occupancy.max(initial=0))}); "
+            "white dots=counted foot points",
         )
         _draw_heatmap_label(
             dwell_overlay,
             "DWELL HEATMAP - blue=0, red=most time "
             f"(cell max {snapshot.dwell_seconds.max(initial=0.0):.2f}s)",
         )
+        for point in counted_points:
+            center = (int(round(point[0])), int(round(point[1])))
+            cv2.circle(occupancy_overlay, center, 7, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.circle(dwell_overlay, center, 7, (255, 255, 255), 2, cv2.LINE_AA)
         self._occupancy.write(occupancy_overlay)
         self._dwell.write(dwell_overlay)
 
