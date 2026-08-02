@@ -27,6 +27,10 @@ def test_example_camera_configuration_loads() -> None:
     assert queue.gap_tolerance_seconds == 1.0
     assert queue.service_completion_radius == 0.08
     assert queue.count_smoothing_alpha == 0.35
+    assert config.speed.window_seconds == 1.0
+    assert config.speed.minimum_displacement_pixels == 2.0
+    assert config.speed.maximum_speed_pixels_per_second == 500.0
+    assert config.speed.maximum_speed_metres_per_second == 12.0
     assert config.calibration is not None
 
 

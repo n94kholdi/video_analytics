@@ -41,6 +41,10 @@ def annotate_tracks(
         )
         state = "confirmed" if observation.confirmed else "unconfirmed"
         label = f"person #{observation.track_id} {state}"
+        if observation.speed_pixels_per_second is not None:
+            label += f" {observation.speed_pixels_per_second:.1f} px/s"
+        if observation.speed_metres_per_second is not None:
+            label += f" {observation.speed_metres_per_second:.2f} m/s"
         cv2.putText(
             annotated,
             label,

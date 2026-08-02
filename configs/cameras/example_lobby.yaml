@@ -12,6 +12,12 @@ tracker:
   lost_track_buffer: 30
   match_threshold: 0.3
 
+speed:
+  window_seconds: 1.0
+  minimum_displacement_pixels: 2.0
+  maximum_speed_pixels_per_second: 500.0
+  maximum_speed_metres_per_second: 12.0
+
 analytics:
   enabled:
     - occupancy

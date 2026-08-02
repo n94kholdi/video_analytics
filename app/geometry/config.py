@@ -446,6 +446,32 @@ class TrackerConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SpeedConfig:
+    """Timestamp-window speed estimation and jump-rejection thresholds."""
+
+    window_seconds: float = 1.0
+    minimum_displacement_pixels: float = 2.0
+    maximum_speed_pixels_per_second: float = 500.0
+    maximum_speed_metres_per_second: float = 12.0
+
+    def __post_init__(self) -> None:
+        for value, field_name in (
+            (self.window_seconds, "window_seconds"),
+            (self.maximum_speed_pixels_per_second, "maximum_speed_pixels_per_second"),
+            (self.maximum_speed_metres_per_second, "maximum_speed_metres_per_second"),
+        ):
+            if not math.isfinite(value) or value <= 0:
+                raise CameraConfigError(f"speed.{field_name} must be positive")
+        if (
+            not math.isfinite(self.minimum_displacement_pixels)
+            or self.minimum_displacement_pixels < 0
+        ):
+            raise CameraConfigError(
+                "speed.minimum_displacement_pixels must be non-negative"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class HeatmapConfig:
     """Movement-heatmap grid, retention, and rendering settings."""
 
@@ -531,6 +557,7 @@ class CameraConfig:
     analytics: AnalyticsConfig
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    speed: SpeedConfig = field(default_factory=SpeedConfig)
     heatmap: HeatmapConfig = field(default_factory=HeatmapConfig)
     calibration: CalibrationConfig | None = None
     outputs: OutputConfig = field(default_factory=OutputConfig)
@@ -547,6 +574,7 @@ class CameraConfig:
         camera = _mapping_value(values.get("camera"), "camera")
         detector = _mapping_value(values.get("detector", {}), "detector")
         tracker = _mapping_value(values.get("tracker", {}), "tracker")
+        speed = _mapping_value(values.get("speed", {}), "speed")
         heatmap = _mapping_value(values.get("heatmap", {}), "heatmap")
         outputs = _mapping_value(values.get("outputs", {}), "outputs")
         visualization = _mapping_value(values.get("visualization", {}), "visualization")
@@ -585,6 +613,21 @@ class CameraConfig:
                 _number(tracker.get("activation_threshold", 0.4), "tracker.activation_threshold"),
                 _positive_int(tracker.get("lost_track_buffer", 30), "tracker.lost_track_buffer"),
                 _number(tracker.get("match_threshold", 0.3), "tracker.match_threshold"),
+            ),
+            SpeedConfig(
+                _number(speed.get("window_seconds", 1.0), "speed.window_seconds"),
+                _number(
+                    speed.get("minimum_displacement_pixels", 2.0),
+                    "speed.minimum_displacement_pixels",
+                ),
+                _number(
+                    speed.get("maximum_speed_pixels_per_second", 500.0),
+                    "speed.maximum_speed_pixels_per_second",
+                ),
+                _number(
+                    speed.get("maximum_speed_metres_per_second", 12.0),
+                    "speed.maximum_speed_metres_per_second",
+                ),
             ),
             HeatmapConfig(
                 _point_list(region_value, "heatmap.region") if region_value is not None else None,
@@ -647,6 +690,7 @@ class CameraConfig:
             "camera": {"id": self.camera_id, "name": self.name, "source": self.source},
             "detector": asdict(self.detector),
             "tracker": asdict(self.tracker),
+            "speed": asdict(self.speed),
             "analytics": {
                 "enabled": list(self.analytics.enabled),
                 "occupancy_zones": [_zone_mapping(item) for item in self.analytics.occupancy_zones],

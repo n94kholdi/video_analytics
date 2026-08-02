@@ -299,6 +299,7 @@ def test_queue_cli_is_disabled_until_explicitly_enabled() -> None:
     assert not disabled.enable_queue
     assert not disabled.enable_restricted_area
     assert enabled.enable_queue
+    assert not enabled.enable_restricted_area
     assert enabled.queue_mode == "vertical"
     assert parser.parse_args(
         ["input.mp4", "--enable-restricted-area"]

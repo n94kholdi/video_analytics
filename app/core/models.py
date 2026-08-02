@@ -52,6 +52,10 @@ class TrackObservation:
     trajectory: tuple[TrajectoryPoint, ...]
     ground_position: tuple[float, float] | None = None
     smoothed_velocity: tuple[float, float] | None = None
+    speed_pixels_per_second: float | None = None
+    speed_metres_per_second: float | None = None
+    speed_unavailable_reason: str | None = None
+    ground_smoothed_velocity: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -107,6 +107,16 @@ def annotate_queues(
     if config.queues:
         summary = "Queues | " + " | ".join(
             f"{status.queue_id}: {status.raw_count}"
+            + (
+                f" progress {status.average_progress_speed_pixels_per_second:.1f} px/s"
+                if status.average_progress_speed_pixels_per_second is not None
+                else ""
+            )
+            + (
+                f" ({status.average_progress_speed_metres_per_second:.2f} m/s)"
+                if status.average_progress_speed_metres_per_second is not None
+                else ""
+            )
             + (" OVERFLOW" if status.overflow else "")
             for status in snapshot.queues
         )

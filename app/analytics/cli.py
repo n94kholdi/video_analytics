@@ -26,6 +26,7 @@ from app.analytics.restricted_area import (
 from app.analytics.restricted_visualization import annotate_restricted_areas
 from app.analytics.queue import CameraQueueConfig, QueueAnalyzer
 from app.analytics.queue_visualization import annotate_queues
+from app.analytics.speed import CameraSpeedConfig, SpeedEstimator
 from app.analytics.vertical_queue import VerticalQueueAnalyzer, VerticalQueueConfig
 from app.analytics.vertical_queue_visualization import annotate_vertical_queues
 from app.analytics.visualization import annotate_people_counts
@@ -159,6 +160,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     queue_config = _queue_config(
         camera_config, camera_counting.camera_id, (width, height)
     )
+    speed_requested = args.enable_queue or (
+        camera_config is not None and "speed" in camera_config.analytics.enabled
+    )
+    speed_config = (
+        CameraSpeedConfig.from_camera_config(camera_config, (width, height))
+        if camera_config is not None
+        else CameraSpeedConfig.for_image(
+            camera_counting.camera_id, (width, height)
+        )
+    )
+    speed_estimator = SpeedEstimator((speed_config,)) if speed_requested else None
     if args.enable_restricted_area and not restricted_config.zones:
         raise ValueError(
             "--enable-restricted-area requires at least one enabled restricted zone"
@@ -226,6 +238,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         configured_queues.reset()
     if vertical_queues is not None:
         vertical_queues.reset()
+    if speed_estimator is not None:
+        speed_estimator.reset()
     heatmaps = None
     heatmap_directory = None
     heatmap_settings = camera_config.heatmap if camera_config is not None else None
@@ -303,9 +317,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         + tuple(f"queue_smoothed_{queue_id}" for queue_id in queue_ids)
         + tuple(f"queue_wait_seconds_{queue_id}" for queue_id in queue_ids)
         + tuple(f"queue_overflow_{queue_id}" for queue_id in queue_ids)
+        + tuple(f"queue_average_speed_pixels_per_second_{queue_id}" for queue_id in queue_ids)
+        + tuple(f"queue_average_speed_metres_per_second_{queue_id}" for queue_id in queue_ids)
+        + tuple(f"queue_progress_pixels_per_second_{queue_id}" for queue_id in queue_ids)
+        + tuple(f"queue_progress_metres_per_second_{queue_id}" for queue_id in queue_ids)
         if configured_queues is not None
         else (
-            ("vertical_queue_rows", "vertical_queue_people", "vertical_queue_counts")
+            (
+                "vertical_queue_rows",
+                "vertical_queue_people",
+                "vertical_queue_counts",
+                "vertical_queue_speeds_pixels_per_second",
+                "vertical_queue_speeds_metres_per_second",
+            )
             if vertical_queues is not None
             else ()
         )
@@ -322,6 +346,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                     *(f"occupancy_{zone_id}" for zone_id in zone_ids),
                     "cumulative_entries",
                     "cumulative_exits",
+                    *(
+                        (
+                            "average_speed_pixels_per_second",
+                            "average_speed_metres_per_second",
+                        )
+                        if speed_estimator is not None
+                        else ()
+                    ),
                     *(f"restricted_current_{zone_id}" for zone_id in restricted_zone_ids),
                     *(f"restricted_entries_{zone_id}" for zone_id in restricted_zone_ids),
                     *(f"restricted_exits_{zone_id}" for zone_id in restricted_zone_ids),
@@ -348,15 +380,29 @@ def main(argv: Sequence[str] | None = None) -> None:
                     timestamp=timestamp,
                     frame_index=frames,
                 )
+                speed_result = (
+                    speed_estimator.update(
+                        camera_counting.camera_id,
+                        tracked.observations,
+                        timestamp=timestamp,
+                    )
+                    if speed_estimator is not None
+                    else None
+                )
+                observations = (
+                    speed_result.observations
+                    if speed_result is not None
+                    else tracked.observations
+                )
                 counted = counter.update(
                     camera_counting.camera_id,
-                    tracked.observations,
+                    observations,
                     timestamp=timestamp,
                 )
                 intrusion = (
                     restricted.update(
                         restricted_config.camera_id,
-                        tracked.observations,
+                        observations,
                         timestamp=timestamp,
                     )
                     if restricted is not None
@@ -365,7 +411,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 queue_result = (
                     configured_queues.update(
                         queue_config.camera_id,
-                        tracked.observations,
+                        observations,
                         timestamp=timestamp,
                     )
                     if configured_queues is not None
@@ -374,7 +420,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 vertical_queue_snapshot = (
                     vertical_queues.update(
                         camera_counting.camera_id,
-                        tracked.observations,
+                        observations,
                         timestamp=timestamp,
                     )
                     if vertical_queues is not None
@@ -382,7 +428,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 )
                 if heatmaps is not None:
                     heatmap_snapshot = heatmaps.update(
-                        tracked.observations, timestamp=timestamp
+                        observations, timestamp=timestamp
                     )
                     assert heatmap_video_writer is not None
                     heatmap_video_writer.write(
@@ -390,17 +436,17 @@ def main(argv: Sequence[str] | None = None) -> None:
                         frame,
                         counted_points=tuple(
                             observation.foot_point
-                            for observation in tracked.observations
+                            for observation in observations
                             if observation.confirmed
                         ),
                     )
                 confirmed_humans = sum(
-                    observation.confirmed for observation in tracked.observations
+                    observation.confirmed for observation in observations
                 )
                 snapshot = counted.snapshot
                 annotated = annotate_tracks(
                     frame,
-                    tracked.observations,
+                    observations,
                     tracking_ms=tracked.tracking_ms,
                     show_trajectories=not args.no_trajectories,
                 )
@@ -418,7 +464,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                         final_frame,
                         restricted_config,
                         intrusion.snapshot,
-                        tracked.observations,
+                        observations,
                         copy=False,
                     )
                 if queue_result is not None:
@@ -426,14 +472,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                         final_frame,
                         queue_config,
                         queue_result.snapshot,
-                        tracked.observations,
+                        observations,
                         copy=False,
                     )
                 if vertical_queue_snapshot is not None:
                     final_frame = annotate_vertical_queues(
                         final_frame,
                         vertical_queue_snapshot,
-                        tracked.observations,
+                        observations,
                         copy=False,
                     )
                 writer.write(final_frame)
@@ -457,6 +503,30 @@ def main(argv: Sequence[str] | None = None) -> None:
                         queue_result.snapshot.queue_for(queue_id).overflow
                         for queue_id in queue_ids
                     )
+                    queue_csv_values.extend(
+                        queue_result.snapshot.queue_for(
+                            queue_id
+                        ).average_speed_pixels_per_second
+                        for queue_id in queue_ids
+                    )
+                    queue_csv_values.extend(
+                        queue_result.snapshot.queue_for(
+                            queue_id
+                        ).average_speed_metres_per_second
+                        for queue_id in queue_ids
+                    )
+                    queue_csv_values.extend(
+                        queue_result.snapshot.queue_for(
+                            queue_id
+                        ).average_progress_speed_pixels_per_second
+                        for queue_id in queue_ids
+                    )
+                    queue_csv_values.extend(
+                        queue_result.snapshot.queue_for(
+                            queue_id
+                        ).average_progress_speed_metres_per_second
+                        for queue_id in queue_ids
+                    )
                 elif vertical_queue_snapshot is not None:
                     queue_csv_values.extend(
                         (
@@ -465,6 +535,16 @@ def main(argv: Sequence[str] | None = None) -> None:
                             ";".join(
                                 f"row_{row.row_id}:{row.count}"
                                 for row in vertical_queue_snapshot.rows
+                            ),
+                            ";".join(
+                                f"row_{row.row_id}:{row.average_speed_pixels_per_second:.6f}"
+                                for row in vertical_queue_snapshot.rows
+                                if row.average_speed_pixels_per_second is not None
+                            ),
+                            ";".join(
+                                f"row_{row.row_id}:{row.average_speed_metres_per_second:.6f}"
+                                for row in vertical_queue_snapshot.rows
+                                if row.average_speed_metres_per_second is not None
                             ),
                         )
                     )
@@ -477,6 +557,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                         *(snapshot.occupancy_for(zone_id) for zone_id in zone_ids),
                         snapshot.cumulative_entries,
                         snapshot.cumulative_exits,
+                        *(
+                            (
+                                speed_result.snapshot.average_speed_pixels_per_second,
+                                speed_result.snapshot.average_speed_metres_per_second,
+                            )
+                            if speed_result is not None
+                            else ()
+                        ),
                         *(
                             intrusion.snapshot.zone_for(zone_id).current_tracks
                             for zone_id in restricted_zone_ids
@@ -565,6 +653,12 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "queue_mode": args.queue_mode if args.enable_queue else None,
                 "queue_events": (
                     queue_events if configured_queues is not None else None
+                ),
+                "speed_analytics_enabled": speed_estimator is not None,
+                "physical_speed_warning": (
+                    speed_result.snapshot.calibration_warning
+                    if speed_estimator is not None and speed_result is not None
+                    else None
                 ),
                 "restricted_events_jsonl": str(event_path.resolve())
                 if event_path is not None

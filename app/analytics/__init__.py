@@ -43,6 +43,16 @@ from app.analytics.queue import (
     QueueTrackStatus,
 )
 from app.analytics.queue_visualization import annotate_queues
+from app.analytics.speed import (
+    CalibrationDistanceCheck,
+    CameraSpeedConfig,
+    SpeedEstimator,
+    SpeedResult,
+    SpeedSnapshot,
+    SpeedTrackStatus,
+    queue_progress_speed,
+    validate_known_ground_distance,
+)
 from app.analytics.vertical_queue import (
     VerticalQueueAnalyzer,
     VerticalQueueConfig,
@@ -59,6 +69,8 @@ __all__ = [
     "CameraCountingConfig",
     "CameraRestrictedAreaConfig",
     "CameraQueueConfig",
+    "CameraSpeedConfig",
+    "CalibrationDistanceCheck",
     "CountingResult",
     "CountingSnapshot",
     "HeatmapAccumulator",
@@ -84,6 +96,10 @@ __all__ = [
     "RestrictedAreaResult",
     "RestrictedAreaSnapshot",
     "RestrictedZoneStatus",
+    "SpeedEstimator",
+    "SpeedResult",
+    "SpeedSnapshot",
+    "SpeedTrackStatus",
     "VerticalQueueAnalyzer",
     "VerticalQueueConfig",
     "VerticalQueueRow",
@@ -97,5 +113,7 @@ __all__ = [
     "export_numeric_grid",
     "hotter_row_color",
     "overlay_heatmap",
+    "queue_progress_speed",
+    "validate_known_ground_distance",
     "vertical_row_color",
 ]

@@ -51,6 +51,7 @@ python3 -m app.analytics.cli data/human.mp4  \
 python -m app.analytics.cli \                                                                 
   data/human.mp4 \
   --camera-config configs/cameras/example_lobby.yaml \
+  --enable-restricted-area \
   --output outputs/phase6_demo.mp4 \        
   --counts-csv outputs/phase6_demo_counts.csv \
   --events-jsonl outputs/phase6_demo_events.jsonl
@@ -71,5 +72,19 @@ python -m app.analytics.cli \
 ## Queue analysis
 
 ```
-
+python -m app.analytics.cli data/human.mp4 \                                                  
+  --enable-queue \
+  --queue-column-distance 0.04 \
+  --queue-min-people 2 \
+  --output outputs/vertical_queues.mp4 \
+  --counts-csv outputs/vertical_queues.csv
+```
+## Queue speed
+```
+python -m app.analytics.cli data/human2.mp4 \                                                 
+  --enable-queue \
+  --queue-column-distance 0.04 \
+  --queue-min-people 2 \
+  --output outputs/vertical_queues_with_speed2.mp4 \
+  --counts-csv outputs/vertical_queues_with_speed2.csv
 ```

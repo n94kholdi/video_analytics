@@ -4,9 +4,9 @@ This is the isolated application scaffold for a medium-complexity, video-based
 people analytics MVP. Existing computer-vision experiments and model weights
 remain outside this directory and are treated as read-only inputs.
 
-Phase 8 provides both manually configured polygon queues and an optional
-automatic near-vertical row grouping requested after the original phase.
-Advanced queue ordering, group-behavior detection, speed analytics, database,
+Phase 9 adds timestamp-window movement speed in explicitly labelled pixels per
+second and, only with valid metre-based ground calibration, metres per second.
+It also adds queue progress toward each configured service point. Database,
 API, and dashboard behavior remain intentionally unimplemented.
 
 ## Planned scope
@@ -172,6 +172,43 @@ frames so their IDs and colors remain stable; membership is recalculated every
 frame, so a track moving into another row adopts that row's color. This does not
 prove that the detected column is a real-world queue.
 
+Speed analytics are separated into:
+
+- `app.analytics.speed`: bounded timestamp-window estimation over smoothed
+  trajectory points, image and calibrated-ground jump rejection, camera/track
+  metrics, and explicit physical-speed unavailability
+- `TrackObservation.speed_pixels_per_second`: image speed, always labelled
+  `px/s`; it is never presented as a physical measurement
+- `TrackObservation.speed_metres_per_second`: physical speed available only
+  when a valid homography declares metre-based ground units
+- queue track and aggregate metrics: signed progress velocity toward the
+  configured service point in `px/s` and, when calibrated, `m/s`
+
+The `speed` camera section configures `window_seconds`,
+`minimum_displacement_pixels`, `maximum_speed_pixels_per_second`, and
+`maximum_speed_metres_per_second`. Estimation uses timestamps rather than video
+FPS, so irregular observations and skipped frames are supported. At least two
+accepted samples within the window are required. Motion below the minimum
+displacement is reported as stationary (`0 px/s`); excessive jumps are rejected
+instead of being allowed to contaminate the track speed.
+
+Queue-progress speed is the signed component of the smoothed velocity pointing
+toward the service point. Positive values mean progress, negative values mean
+movement away, and exactly sideways motion is zero. Queue snapshots and CSV
+metrics include average member movement and progress speeds.
+
+Validate a configured homography against an independently measured distance:
+
+```bash
+python scripts/validate_calibration_distance.py configs/cameras/example_lobby.yaml \
+  --frame-size 1920 1080 --first 383.8 377.65 --second 1535.2 377.65 \
+  --known-metres 8.0
+```
+
+The script reports projected and known distances plus absolute and relative
+error. The two image points should mark surveyed ground locations; this is a
+validation aid, not automatic calibration.
+
 An optional `active_schedule` accepts `start`/`end` in `HH:MM`, weekday names
 or integers (`0` is Monday), and an IANA timezone. Schedule evaluation requires
 Unix timestamps. Recorded-video source-relative timestamps should leave the
@@ -257,10 +294,19 @@ python -m app.analytics.cli data/human.mp4 \
   --counts-csv outputs/human_queues.csv
 ```
 
+This default vertical mode preserves the Phase 8 visualization: people in the
+same detected row use the same color and each row has a full-height colored
+line. Phase 9 additionally estimates speed automatically in this mode. The
+queue label at the top of the frame displays average member speed in `px/s`
+and, when a calibrated camera YAML is supplied, `m/s`. The per-frame CSV adds
+`vertical_queue_speeds_pixels_per_second` and
+`vertical_queue_speeds_metres_per_second` as `row_ID:value` lists. These same
+values are typed fields on each `VerticalQueueRow` for later dashboard use.
+
 Without `--enable-queue`, no queue state is accumulated and no queue overlays,
 queue CSV columns, or queue events are produced. Vertical mode adds
-`vertical_queue_rows`, `vertical_queue_people`, and `vertical_queue_counts` to
-the CSV. To retain the original manual polygon heuristic, use
+`vertical_queue_rows`, `vertical_queue_people`, `vertical_queue_counts`, and
+the two speed columns to the CSV. To retain the original manual polygon heuristic, use
 `--queue-mode configured` together with a camera YAML containing an enabled
 configured queue. To enable both configured restricted areas and automatic
 vertical queues:

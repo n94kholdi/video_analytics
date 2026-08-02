@@ -46,6 +46,8 @@ class VerticalQueueRow:
     top_y: float
     bottom_y: float
     track_ids: tuple[int, ...]
+    average_speed_pixels_per_second: float | None = None
+    average_speed_metres_per_second: float | None = None
 
     @property
     def count(self) -> int:
@@ -154,6 +156,8 @@ class VerticalQueueAnalyzer:
                         min(item.xyxy[1] for item in cluster),
                         max(item.xyxy[3] for item in cluster),
                         tuple(sorted(item.track_id for item in cluster)),
+                        _average_speed(cluster, "speed_pixels_per_second"),
+                        _average_speed(cluster, "speed_metres_per_second"),
                     )
                     for row_id, center, cluster in zip(row_ids, centers, clusters)
                 ),
@@ -202,3 +206,14 @@ class VerticalQueueAnalyzer:
 
 def _center_x(observation: TrackObservation) -> float:
     return (observation.xyxy[0] + observation.xyxy[2]) / 2.0
+
+
+def _average_speed(
+    observations: Sequence[TrackObservation], field: str
+) -> float | None:
+    values = [
+        value
+        for observation in observations
+        if (value := getattr(observation, field)) is not None
+    ]
+    return sum(values) / len(values) if values else None

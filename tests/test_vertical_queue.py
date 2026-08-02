@@ -20,6 +20,8 @@ def _observation(
     timestamp: float = 0.0,
     *,
     confirmed: bool = True,
+    speed_pixels: float | None = None,
+    speed_metres: float | None = None,
 ) -> TrackObservation:
     x, y = center
     return TrackObservation(
@@ -32,6 +34,8 @@ def _observation(
         detection_confidence=0.9,
         confirmed=confirmed,
         trajectory=(),
+        speed_pixels_per_second=speed_pixels,
+        speed_metres_per_second=speed_metres,
     )
 
 
@@ -88,6 +92,26 @@ def test_row_ids_and_colors_remain_stable_during_small_motion() -> None:
     assert vertical_row_color(first.rows[0].row_id) == vertical_row_color(
         second.rows[0].row_id
     )
+
+
+def test_each_vertical_queue_exposes_average_member_speed() -> None:
+    analyzer = _analyzer()
+
+    snapshot = analyzer.update(
+        "cam-a",
+        (
+            _observation(1, (20, 30), speed_pixels=10, speed_metres=1),
+            _observation(2, (23, 70), speed_pixels=20, speed_metres=2),
+            _observation(3, (70, 30), speed_pixels=4),
+            _observation(4, (73, 70), speed_pixels=8),
+        ),
+        timestamp=1,
+    )
+
+    assert snapshot.rows[0].average_speed_pixels_per_second == 15
+    assert snapshot.rows[0].average_speed_metres_per_second == 1.5
+    assert snapshot.rows[1].average_speed_pixels_per_second == 6
+    assert snapshot.rows[1].average_speed_metres_per_second is None
 
 
 def test_person_switching_rows_takes_the_destination_row_color() -> None:
