@@ -45,3 +45,31 @@ python3 -m app.analytics.cli data/human.mp4  \
   --counts-csv outputs/human_counting.csv \
   --no-trajectories
 ```
+
+## restricted area detection and track people movement in region
+```
+python -m app.analytics.cli \                                                                 
+  data/human.mp4 \
+  --camera-config configs/cameras/example_lobby.yaml \
+  --output outputs/phase6_demo.mp4 \        
+  --counts-csv outputs/phase6_demo_counts.csv \
+  --events-jsonl outputs/phase6_demo_events.jsonl
+```
+## Heatmap computing
+
+```
+python -m app.analytics.cli \                                                                 
+  data/human.mp4 \
+  --camera-config configs/cameras/example_lobby.yaml \
+  --output outputs/full_demo/annotated.mp4 \
+  --counts-csv outputs/full_demo/counts.csv \
+  --events-jsonl outputs/full_demo/events.jsonl \
+  --heatmap-dir outputs/full_demo/heatmap \
+  --enable-heatmap
+```
+
+## Queue analysis
+
+```
+
+```

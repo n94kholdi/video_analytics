@@ -4,10 +4,10 @@ This is the isolated application scaffold for a medium-complexity, video-based
 people analytics MVP. Existing computer-vision experiments and model weights
 remain outside this directory and are treated as read-only inputs.
 
-Phase 7 adds bounded movement occupancy and dwell heatmaps on top of shared
-confirmed tracker foot points. Queue, speed, database, API, and dashboard
-behavior remain intentionally unimplemented; event persistence is currently
-limited to a shared sink interface and JSONL output.
+Phase 8 provides both manually configured polygon queues and an optional
+automatic near-vertical row grouping requested after the original phase.
+Advanced queue ordering, group-behavior detection, speed analytics, database,
+API, and dashboard behavior remain intentionally unimplemented.
 
 ## Planned scope
 
@@ -135,6 +135,43 @@ each foot-point cell into a readable density region without changing the exact
 numeric CSV values. Set the heatmap `region` to the normalized full-frame
 rectangle `[[0, 0], [1, 0], [1, 1], [0, 1]]` to color the entire image.
 
+Queue analytics are separated into:
+
+- `app.analytics.queue`: independent camera/queue/track state, join/leave and
+  edge-triggered overflow events, raw and exponentially smoothed counts, and
+  current/completed waiting-time estimates
+- `app.analytics.queue_visualization`: polygons, service points, queue metrics,
+  overflow state, and candidate/member labels on tracked people
+- `app.analytics.vertical_queue`: automatic grouping by horizontal proximity
+  of confirmed bbox centers, stable row IDs, and per-frame reassignment
+- `app.analytics.vertical_queue_visualization`: same-color member boxes,
+  vertical row lines, and a single queue-count summary line
+
+Queue membership is heuristic. A confirmed track becomes a queue candidate
+only while its foot point is inside the manually configured polygon and its
+smoothed image speed does not exceed
+`maximum_speed_pixels_per_second`. It becomes a member after
+`minimum_dwell_seconds`. State survives missing tracker observations for
+`gap_tolerance_seconds`; an explicitly observed polygon exit is handled
+immediately. `service_completion_radius` is a normalized image-coordinate
+distance from the manual service point and determines whether a leaving track's
+wait is considered completed. The approximate current wait is the mean elapsed
+time since qualifying presence among current members. These values are useful
+operational estimates, not proof that a person is queueing or was served.
+
+`raw_count` contains dwell-qualified active members. `smoothed_count` is an
+exponential moving average controlled by `count_smoothing_alpha`. Queue presence
+uses `raw_count > 0`, and overflow uses `raw_count >= overflow_threshold`.
+Overflow start/end events are emitted only when that Boolean state changes.
+Configured mode performs no automatic discovery, ordering, or group inference.
+Vertical mode is a deliberately small geometric heuristic: confirmed people
+whose bbox-center X positions are within `--queue-column-distance` (a fraction
+of frame width) are grouped into a nearly vertical row. Groups smaller than
+`--queue-min-people` are omitted. Row centers are matched between adjacent
+frames so their IDs and colors remain stable; membership is recalculated every
+frame, so a track moving into another row adopts that row's color. This does not
+prove that the detected column is a real-world queue.
+
 An optional `active_schedule` accepts `start`/`end` in `HH:MM`, weekday names
 or integers (`0` is Monday), and an IANA timezone. Schedule evaluation requires
 Unix timestamps. Recorded-video source-relative timestamps should leave the
@@ -206,9 +243,38 @@ python -m app.analytics.cli data/human.mp4 \
   --counts-csv outputs/human_counts.csv
 ```
 
-The configured run also processes restricted zones, draws their current status,
-and appends intrusion events to `outputs.events_jsonl`. Override that destination
-with `--events-jsonl`; no restricted zones are assumed without a camera YAML.
+Restricted-area and queue processing are both runtime opt-in. Use
+`--enable-restricted-area` for configured restricted zones. Use
+`--enable-queue` for automatic vertical grouping, which is the default queue
+mode and does not require configured queue polygons:
+
+```bash
+python -m app.analytics.cli data/human.mp4 \
+  --enable-queue \
+  --queue-column-distance 0.08 \
+  --queue-min-people 2 \
+  --output outputs/human_queues.mp4 \
+  --counts-csv outputs/human_queues.csv
+```
+
+Without `--enable-queue`, no queue state is accumulated and no queue overlays,
+queue CSV columns, or queue events are produced. Vertical mode adds
+`vertical_queue_rows`, `vertical_queue_people`, and `vertical_queue_counts` to
+the CSV. To retain the original manual polygon heuristic, use
+`--queue-mode configured` together with a camera YAML containing an enabled
+configured queue. To enable both configured restricted areas and automatic
+vertical queues:
+
+```bash
+python -m app.analytics.cli data/human.mp4 \
+  --camera-config configs/cameras/example_lobby.yaml \
+  --enable-restricted-area \
+  --enable-queue \
+  --output outputs/human_analytics.mp4
+```
+
+Without `--enable-restricted-area`, no restricted-area state, overlay, CSV
+columns, or restricted-area events are produced.
 
 Heatmap processing is runtime opt-in even when the camera YAML lists the module.
 Pass `--enable-heatmap` to produce evolving occupancy and dwell overlay videos,
@@ -321,7 +387,7 @@ rejects it with a clear shape error instead of guessing.
 
 ## Planned commands
 
-The following interfaces are planned and are not available in Phase 7:
+The following interfaces are planned and are not available in Phase 8:
 
 ```bash
 video-analytics api --config configs/default.yaml

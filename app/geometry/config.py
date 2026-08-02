@@ -243,18 +243,45 @@ class ServicePoint:
 
 @dataclass(frozen=True, slots=True)
 class QueueRegion:
-    """Configured queue polygon, destination, and overflow threshold."""
+    """Configured queue polygon, destination, and heuristic thresholds."""
 
     queue_id: str
     polygon: tuple[NormalizedPoint, ...]
     service_point: ServicePoint
     overflow_threshold: int
+    minimum_dwell_seconds: float = 2.0
+    maximum_speed_pixels_per_second: float = 40.0
+    gap_tolerance_seconds: float = 1.0
+    service_completion_radius: float = 0.08
+    count_smoothing_alpha: float = 0.35
 
     def __post_init__(self) -> None:
         if not self.queue_id.strip():
             raise CameraConfigError("queue id must be non-empty")
         if isinstance(self.overflow_threshold, bool) or self.overflow_threshold <= 0:
             raise CameraConfigError("queue overflow_threshold must be positive")
+        for value, field_name in (
+            (self.minimum_dwell_seconds, "minimum_dwell_seconds"),
+            (
+                self.maximum_speed_pixels_per_second,
+                "maximum_speed_pixels_per_second",
+            ),
+            (self.gap_tolerance_seconds, "gap_tolerance_seconds"),
+        ):
+            if not math.isfinite(value) or value < 0:
+                raise CameraConfigError(f"queue {field_name} must be non-negative")
+        if (
+            not math.isfinite(self.service_completion_radius)
+            or not 0.0 < self.service_completion_radius <= math.sqrt(2.0)
+        ):
+            raise CameraConfigError(
+                "queue service_completion_radius must be in (0, sqrt(2)]"
+            )
+        if (
+            not math.isfinite(self.count_smoothing_alpha)
+            or not 0.0 < self.count_smoothing_alpha <= 1.0
+        ):
+            raise CameraConfigError("queue count_smoothing_alpha must be in (0, 1]")
         try:
             validate_polygon(tuple(point.as_tuple() for point in self.polygon))
         except ValueError as exc:
@@ -276,7 +303,29 @@ class QueueRegion:
                     f"{field}.service_point.label",
                 ),
             ),
-            _positive_int(mapping.get("overflow_threshold"), f"{field}.overflow_threshold"),
+            _positive_int(
+                mapping.get("overflow_threshold"), f"{field}.overflow_threshold"
+            ),
+            _number(
+                mapping.get("minimum_dwell_seconds", 2.0),
+                f"{field}.minimum_dwell_seconds",
+            ),
+            _number(
+                mapping.get("maximum_speed_pixels_per_second", 40.0),
+                f"{field}.maximum_speed_pixels_per_second",
+            ),
+            _number(
+                mapping.get("gap_tolerance_seconds", 1.0),
+                f"{field}.gap_tolerance_seconds",
+            ),
+            _number(
+                mapping.get("service_completion_radius", 0.08),
+                f"{field}.service_completion_radius",
+            ),
+            _number(
+                mapping.get("count_smoothing_alpha", 0.35),
+                f"{field}.count_smoothing_alpha",
+            ),
         )
 
 
@@ -817,4 +866,9 @@ def _queue_mapping(queue: QueueRegion) -> dict[str, Any]:
             "label": queue.service_point.label,
         },
         "overflow_threshold": queue.overflow_threshold,
+        "minimum_dwell_seconds": queue.minimum_dwell_seconds,
+        "maximum_speed_pixels_per_second": queue.maximum_speed_pixels_per_second,
+        "gap_tolerance_seconds": queue.gap_tolerance_seconds,
+        "service_completion_radius": queue.service_completion_radius,
+        "count_smoothing_alpha": queue.count_smoothing_alpha,
     }

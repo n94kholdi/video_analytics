@@ -1,4 +1,4 @@
-"""People counting and restricted-area analytics on shared observations."""
+"""People counting, restricted-area, heatmap, and queue analytics."""
 
 from app.analytics.counting import (
     CameraCountingConfig,
@@ -33,10 +33,32 @@ from app.analytics.heatmap import (
     export_numeric_grid,
     overlay_heatmap,
 )
+from app.analytics.queue import (
+    CameraQueueConfig,
+    QueueAnalyzer,
+    QueueResult,
+    QueueSnapshot,
+    QueueStatus,
+    QueueTrackState,
+    QueueTrackStatus,
+)
+from app.analytics.queue_visualization import annotate_queues
+from app.analytics.vertical_queue import (
+    VerticalQueueAnalyzer,
+    VerticalQueueConfig,
+    VerticalQueueRow,
+    VerticalQueueSnapshot,
+)
+from app.analytics.vertical_queue_visualization import (
+    annotate_vertical_queues,
+    hotter_row_color,
+    vertical_row_color,
+)
 
 __all__ = [
     "CameraCountingConfig",
     "CameraRestrictedAreaConfig",
+    "CameraQueueConfig",
     "CountingResult",
     "CountingSnapshot",
     "HeatmapAccumulator",
@@ -52,14 +74,28 @@ __all__ = [
     "MovementHeatmaps",
     "MovementHeatmapSnapshot",
     "PeopleCounter",
+    "QueueAnalyzer",
+    "QueueResult",
+    "QueueSnapshot",
+    "QueueStatus",
+    "QueueTrackState",
+    "QueueTrackStatus",
     "RestrictedAreaDetector",
     "RestrictedAreaResult",
     "RestrictedAreaSnapshot",
     "RestrictedZoneStatus",
+    "VerticalQueueAnalyzer",
+    "VerticalQueueConfig",
+    "VerticalQueueRow",
+    "VerticalQueueSnapshot",
     "annotate_people_counts",
+    "annotate_queues",
     "annotate_restricted_areas",
+    "annotate_vertical_queues",
     "colorize_heatmap",
     "export_heatmap_snapshot",
     "export_numeric_grid",
+    "hotter_row_color",
     "overlay_heatmap",
+    "vertical_row_color",
 ]

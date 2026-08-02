@@ -45,6 +45,11 @@ analytics:
         point: [0.50, 0.45]
         label: reception desk
       overflow_threshold: 6
+      minimum_dwell_seconds: 2.0
+      maximum_speed_pixels_per_second: 40.0
+      gap_tolerance_seconds: 1.0
+      service_completion_radius: 0.08
+      count_smoothing_alpha: 0.35
 
 heatmap:
   region: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]

@@ -20,7 +20,13 @@ def test_example_camera_configuration_loads() -> None:
 
     assert config.camera_id == "lobby_east"
     assert config.analytics.counting_lines[0].line_id == "main_entrance"
-    assert config.analytics.queues[0].service_point.label == "reception desk"
+    queue = config.analytics.queues[0]
+    assert queue.service_point.label == "reception desk"
+    assert queue.minimum_dwell_seconds == 2.0
+    assert queue.maximum_speed_pixels_per_second == 40.0
+    assert queue.gap_tolerance_seconds == 1.0
+    assert queue.service_completion_radius == 0.08
+    assert queue.count_smoothing_alpha == 0.35
     assert config.calibration is not None
 
 

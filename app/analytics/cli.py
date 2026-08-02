@@ -24,6 +24,10 @@ from app.analytics.restricted_area import (
     RestrictedAreaDetector,
 )
 from app.analytics.restricted_visualization import annotate_restricted_areas
+from app.analytics.queue import CameraQueueConfig, QueueAnalyzer
+from app.analytics.queue_visualization import annotate_queues
+from app.analytics.vertical_queue import VerticalQueueAnalyzer, VerticalQueueConfig
+from app.analytics.vertical_queue_visualization import annotate_vertical_queues
 from app.analytics.visualization import annotate_people_counts
 from app.core.config import ConfigError, load_settings
 from app.detection.onnx_detector import OnnxPersonDetector
@@ -58,6 +62,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="enable evolving occupancy/dwell videos and final heatmap exports",
     )
     parser.add_argument(
+        "--enable-queue",
+        action="store_true",
+        help="enable queue grouping, CSV metrics, and overlays",
+    )
+    parser.add_argument(
+        "--queue-mode",
+        choices=("vertical", "configured"),
+        default="vertical",
+        help="vertical bbox-center grouping (default) or configured polygons",
+    )
+    parser.add_argument(
+        "--queue-column-distance",
+        type=float,
+        default=0.08,
+        help="maximum horizontal bbox-center distance as a frame-width fraction",
+    )
+    parser.add_argument(
+        "--queue-min-people",
+        type=int,
+        default=2,
+        help="minimum people needed to display an automatic vertical queue",
+    )
+    parser.add_argument(
+        "--enable-restricted-area",
+        action="store_true",
+        help="enable configured restricted-area state, events, CSV, and overlays",
+    )
+    parser.add_argument(
         "--heatmap-dir",
         type=Path,
         help="heatmap output directory (requires --enable-heatmap)",
@@ -65,7 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--events-jsonl",
         type=Path,
-        help="append restricted-area events as JSONL (camera YAML output is the default)",
+        help=(
+            "append restricted-area and configured-queue events as JSONL "
+            "(camera YAML output is the default)"
+        ),
     )
     parser.add_argument("--camera-id", default="camera-1")
     parser.add_argument("--max-frames", type=int)
@@ -83,6 +118,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise ValueError("--max-frames must be positive")
     if args.heatmap_dir is not None and not args.enable_heatmap:
         raise ValueError("--heatmap-dir requires --enable-heatmap")
+    if not 0.0 < args.queue_column_distance <= 1.0:
+        raise ValueError("--queue-column-distance must be in (0, 1]")
+    if args.queue_min_people <= 0:
+        raise ValueError("--queue-min-people must be positive")
 
     settings = load_settings(args.config)
     source = args.source.expanduser().resolve()
@@ -117,6 +156,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     restricted_config = _restricted_config(
         camera_config, camera_counting.camera_id, (width, height)
     )
+    queue_config = _queue_config(
+        camera_config, camera_counting.camera_id, (width, height)
+    )
+    if args.enable_restricted_area and not restricted_config.zones:
+        raise ValueError(
+            "--enable-restricted-area requires at least one enabled restricted zone"
+        )
+    if (
+        args.enable_queue
+        and args.queue_mode == "configured"
+        and not queue_config.queues
+    ):
+        raise ValueError(
+            "configured queue mode requires at least one enabled configured queue"
+        )
     event_path = args.events_jsonl
     if event_path is None and camera_config is not None:
         configured_event_path = camera_config.outputs.events_jsonl
@@ -135,12 +189,43 @@ def main(argv: Sequence[str] | None = None) -> None:
         frame_rate=fps,
     )
     counter = PeopleCounter((camera_counting,))
-    restricted = RestrictedAreaDetector(
-        (restricted_config,),
-        event_sink=JsonlEventSink(event_path) if event_path is not None else None,
+    restricted = (
+        RestrictedAreaDetector(
+            (restricted_config,),
+            event_sink=JsonlEventSink(event_path) if event_path is not None else None,
+        )
+        if args.enable_restricted_area
+        else None
+    )
+    configured_queues = (
+        QueueAnalyzer(
+            (queue_config,),
+            event_sink=JsonlEventSink(event_path) if event_path is not None else None,
+        )
+        if args.enable_queue and args.queue_mode == "configured"
+        else None
+    )
+    vertical_queues = (
+        VerticalQueueAnalyzer(
+            (
+                VerticalQueueConfig(
+                    camera_counting.camera_id,
+                    (width, height),
+                    maximum_center_distance_fraction=args.queue_column_distance,
+                    minimum_people=args.queue_min_people,
+                ),
+            )
+        )
+        if args.enable_queue and args.queue_mode == "vertical"
+        else None
     )
     counter.reset()  # Explicit processing-run boundary.
-    restricted.reset()
+    if restricted is not None:
+        restricted.reset()
+    if configured_queues is not None:
+        configured_queues.reset()
+    if vertical_queues is not None:
+        vertical_queues.reset()
     heatmaps = None
     heatmap_directory = None
     heatmap_settings = camera_config.heatmap if camera_config is not None else None
@@ -197,12 +282,34 @@ def main(argv: Sequence[str] | None = None) -> None:
     frames = 0
     events = 0
     restricted_events = 0
+    queue_events = 0
     maximum_confirmed = 0
     maximum_occupancy = 0
     total_ms = 0.0
     reference_frame = None
     zone_ids = tuple(zone.zone_id for zone in camera_counting.occupancy_zones)
-    restricted_zone_ids = tuple(zone.zone_id for zone in restricted_config.zones)
+    restricted_zone_ids = (
+        tuple(zone.zone_id for zone in restricted_config.zones)
+        if restricted is not None
+        else ()
+    )
+    queue_ids = (
+        tuple(queue.queue_id for queue in queue_config.queues)
+        if configured_queues is not None
+        else ()
+    )
+    queue_headers = (
+        tuple(f"queue_raw_{queue_id}" for queue_id in queue_ids)
+        + tuple(f"queue_smoothed_{queue_id}" for queue_id in queue_ids)
+        + tuple(f"queue_wait_seconds_{queue_id}" for queue_id in queue_ids)
+        + tuple(f"queue_overflow_{queue_id}" for queue_id in queue_ids)
+        if configured_queues is not None
+        else (
+            ("vertical_queue_rows", "vertical_queue_people", "vertical_queue_counts")
+            if vertical_queues is not None
+            else ()
+        )
+    )
     try:
         with counts_csv.open("w", encoding="utf-8", newline="") as stream:
             csv_writer = csv.writer(stream)
@@ -218,6 +325,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     *(f"restricted_current_{zone_id}" for zone_id in restricted_zone_ids),
                     *(f"restricted_entries_{zone_id}" for zone_id in restricted_zone_ids),
                     *(f"restricted_exits_{zone_id}" for zone_id in restricted_zone_ids),
+                    *queue_headers,
                 ]
             )
             while args.max_frames is None or frames < args.max_frames:
@@ -245,10 +353,32 @@ def main(argv: Sequence[str] | None = None) -> None:
                     tracked.observations,
                     timestamp=timestamp,
                 )
-                intrusion = restricted.update(
-                    restricted_config.camera_id,
-                    tracked.observations,
-                    timestamp=timestamp,
+                intrusion = (
+                    restricted.update(
+                        restricted_config.camera_id,
+                        tracked.observations,
+                        timestamp=timestamp,
+                    )
+                    if restricted is not None
+                    else None
+                )
+                queue_result = (
+                    configured_queues.update(
+                        queue_config.camera_id,
+                        tracked.observations,
+                        timestamp=timestamp,
+                    )
+                    if configured_queues is not None
+                    else None
+                )
+                vertical_queue_snapshot = (
+                    vertical_queues.update(
+                        camera_counting.camera_id,
+                        tracked.observations,
+                        timestamp=timestamp,
+                    )
+                    if vertical_queues is not None
+                    else None
                 )
                 if heatmaps is not None:
                     heatmap_snapshot = heatmaps.update(
@@ -278,17 +408,66 @@ def main(argv: Sequence[str] | None = None) -> None:
                     annotated,
                     snapshot,
                     confirmed_humans=confirmed_humans,
-                    restricted_snapshot=intrusion.snapshot,
+                    restricted_snapshot=(
+                        intrusion.snapshot if intrusion is not None else None
+                    ),
                 )
-                writer.write(
-                    annotate_restricted_areas(
-                        counted_frame,
+                final_frame = counted_frame
+                if intrusion is not None:
+                    final_frame = annotate_restricted_areas(
+                        final_frame,
                         restricted_config,
                         intrusion.snapshot,
                         tracked.observations,
                         copy=False,
                     )
-                )
+                if queue_result is not None:
+                    final_frame = annotate_queues(
+                        final_frame,
+                        queue_config,
+                        queue_result.snapshot,
+                        tracked.observations,
+                        copy=False,
+                    )
+                if vertical_queue_snapshot is not None:
+                    final_frame = annotate_vertical_queues(
+                        final_frame,
+                        vertical_queue_snapshot,
+                        tracked.observations,
+                        copy=False,
+                    )
+                writer.write(final_frame)
+                queue_csv_values: list[object] = []
+                if queue_result is not None:
+                    queue_csv_values.extend(
+                        queue_result.snapshot.queue_for(queue_id).raw_count
+                        for queue_id in queue_ids
+                    )
+                    queue_csv_values.extend(
+                        f"{queue_result.snapshot.queue_for(queue_id).smoothed_count:.6f}"
+                        for queue_id in queue_ids
+                    )
+                    queue_csv_values.extend(
+                        queue_result.snapshot.queue_for(
+                            queue_id
+                        ).approximate_current_waiting_seconds
+                        for queue_id in queue_ids
+                    )
+                    queue_csv_values.extend(
+                        queue_result.snapshot.queue_for(queue_id).overflow
+                        for queue_id in queue_ids
+                    )
+                elif vertical_queue_snapshot is not None:
+                    queue_csv_values.extend(
+                        (
+                            len(vertical_queue_snapshot.rows),
+                            sum(row.count for row in vertical_queue_snapshot.rows),
+                            ";".join(
+                                f"row_{row.row_id}:{row.count}"
+                                for row in vertical_queue_snapshot.rows
+                            ),
+                        )
+                    )
                 csv_writer.writerow(
                     [
                         frames,
@@ -310,6 +489,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                             intrusion.snapshot.zone_for(zone_id).cumulative_exits
                             for zone_id in restricted_zone_ids
                         ),
+                        *queue_csv_values,
                     ]
                 )
                 maximum_confirmed = max(maximum_confirmed, confirmed_humans)
@@ -317,7 +497,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                     maximum_occupancy, snapshot.current_occupancy
                 )
                 events += len(counted.events)
-                restricted_events += len(intrusion.events)
+                if intrusion is not None:
+                    restricted_events += len(intrusion.events)
+                if queue_result is not None:
+                    queue_events += len(queue_result.events)
                 frames += 1
                 total_ms += (perf_counter() - started) * 1000.0
     finally:
@@ -374,7 +557,15 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "maximum_confirmed_humans": maximum_confirmed,
                 "maximum_total_zone_occupancy": maximum_occupancy,
                 "line_crossed_events": events,
-                "restricted_area_events": restricted_events,
+                "restricted_area_enabled": restricted is not None,
+                "restricted_area_events": (
+                    restricted_events if restricted is not None else None
+                ),
+                "queue_analytics_enabled": args.enable_queue,
+                "queue_mode": args.queue_mode if args.enable_queue else None,
+                "queue_events": (
+                    queue_events if configured_queues is not None else None
+                ),
                 "restricted_events_jsonl": str(event_path.resolve())
                 if event_path is not None
                 else None,
@@ -417,6 +608,16 @@ def _restricted_config(
     if camera_config is not None:
         return CameraRestrictedAreaConfig.from_camera_config(camera_config, frame_size)
     return CameraRestrictedAreaConfig(default_camera_id, frame_size)
+
+
+def _queue_config(
+    camera_config: CameraConfig | None,
+    default_camera_id: str,
+    frame_size: tuple[int, int],
+) -> CameraQueueConfig:
+    if camera_config is not None:
+        return CameraQueueConfig.from_camera_config(camera_config, frame_size)
+    return CameraQueueConfig(default_camera_id, frame_size)
 
 
 def _export_paths(paths: HeatmapExportPaths) -> dict[str, str | None]:
