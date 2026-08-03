@@ -12,12 +12,20 @@ from typing import Sequence
 
 import cv2
 
+from app.api.live import (
+    LiveReporter,
+    processed_frame_count,
+    processing_frame_size,
+    resize_processing_frame,
+)
 from app.analytics.counting import CameraCountingConfig, PeopleCounter
 from app.analytics.heatmap import (
     HeatmapExportPaths,
     HeatmapVideoWriter,
     MovementHeatmaps,
+    colorize_heatmap,
     export_heatmap_snapshot,
+    overlay_heatmap,
 )
 from app.analytics.restricted_area import (
     CameraRestrictedAreaConfig,
@@ -105,6 +113,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--camera-id", default="camera-1")
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument("--live-dir", type=Path, help="optional dashboard job directory")
+    parser.add_argument("--job-id", help="dashboard job ID (requires --live-dir)")
+    parser.add_argument(
+        "--processing-width",
+        type=int,
+        help="downscale wider input frames to this width before processing",
+    )
+    parser.add_argument("--frame-stride", type=int, default=1, help="process every Nth source frame")
     parser.add_argument(
         "--no-trajectories",
         action="store_true",
@@ -115,8 +131,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if (args.live_dir is None) != (args.job_id is None):
+        raise ValueError("--live-dir and --job-id must be provided together")
     if args.max_frames is not None and args.max_frames <= 0:
         raise ValueError("--max-frames must be positive")
+    if args.processing_width is not None and args.processing_width < 2:
+        raise ValueError("--processing-width must be at least 2")
+    if args.frame_stride <= 0:
+        raise ValueError("--frame-stride must be positive")
     if args.heatmap_dir is not None and not args.enable_heatmap:
         raise ValueError("--heatmap-dir requires --enable-heatmap")
     if not 0.0 < args.queue_column_distance <= 1.0:
@@ -145,8 +167,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if width <= 0 or height <= 0:
         capture.release()
         raise RuntimeError(f"video has invalid dimensions: {width}x{height}")
+    width, height = processing_frame_size(width, height, args.processing_width)
     if not math.isfinite(fps) or fps <= 0:
         fps = 30.0
+    output_fps = fps / args.frame_stride
 
     camera_config = (
         load_camera_config(args.camera_config) if args.camera_config is not None else None
@@ -198,7 +222,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         lost_track_buffer=settings.tracker_lost_track_buffer,
         match_threshold=settings.tracker_match_threshold,
         history_size=settings.tracker_history_size,
-        frame_rate=fps,
+        frame_rate=output_fps,
+        frame_size=(width, height),
+    )
+    reporter = LiveReporter(
+        args.live_dir,
+        args.job_id,
+        total_frames=processed_frame_count(capture, args.max_frames, args.frame_stride),
     )
     counter = PeopleCounter((camera_counting,))
     restricted = (
@@ -265,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     counts_csv.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(
-        str(output), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+        str(output), cv2.VideoWriter_fourcc(*"mp4v"), output_fps, (width, height)
     )
     if not writer.isOpened():
         capture.release()
@@ -282,7 +312,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             heatmap_video_writer = HeatmapVideoWriter(
                 heatmap_directory,
                 prefix=f"{heatmaps.camera_id}_image",
-                fps=fps,
+                fps=output_fps,
                 frame_size=(width, height),
                 color_map=color_map,
                 opacity=opacity,
@@ -301,6 +331,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     maximum_occupancy = 0
     total_ms = 0.0
     reference_frame = None
+    unique_track_ids: set[int] = set()
+    lost_tracks = 0
     zone_ids = tuple(zone.zone_id for zone in camera_counting.occupancy_zones)
     restricted_zone_ids = (
         tuple(zone.zone_id for zone in restricted_config.zones)
@@ -334,6 +366,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             else ()
         )
     )
+    source_frames = 0
     try:
         with counts_csv.open("w", encoding="utf-8", newline="") as stream:
             csv_writer = csv.writer(stream)
@@ -364,6 +397,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                 readable, frame = capture.read()
                 if not readable:
                     break
+                source_index = source_frames
+                source_frames += 1
+                if source_index % args.frame_stride != 0:
+                    continue
+                frame = resize_processing_frame(frame, (width, height))
                 if reference_frame is None:
                     reference_frame = frame.copy()
                 started = perf_counter()
@@ -371,7 +409,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 timestamp = (
                     source_ms / 1000.0
                     if math.isfinite(source_ms) and source_ms >= 0
-                    else frames / fps
+                    else source_index / fps
                 )
                 detected = detector.detect(frame)
                 tracked = tracker.update(
@@ -380,6 +418,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                     timestamp=timestamp,
                     frame_index=frames,
                 )
+                unique_track_ids.update(item.track_id for item in tracked.observations)
+                lost_tracks += len(tracked.expired_track_ids)
                 speed_result = (
                     speed_estimator.update(
                         camera_counting.camera_id,
@@ -591,6 +631,72 @@ def main(argv: Sequence[str] | None = None) -> None:
                     queue_events += len(queue_result.events)
                 frames += 1
                 total_ms += (perf_counter() - started) * 1000.0
+                restricted_occupancy = (
+                    sum(zone.current_tracks for zone in intrusion.snapshot.zones)
+                    if intrusion is not None else None
+                )
+                queue_statuses = (
+                    queue_result.snapshot.queues if queue_result is not None else ()
+                )
+                vertical_rows = (
+                    vertical_queue_snapshot.rows if vertical_queue_snapshot is not None else ()
+                )
+                queue_lengths = [item.raw_count for item in queue_statuses] or [
+                    item.count for item in vertical_rows
+                ]
+                queue_waits = [
+                    item.approximate_current_waiting_seconds
+                    for item in queue_statuses
+                    if item.approximate_current_waiting_seconds is not None
+                ]
+                queue_speeds = [
+                    item.average_speed_pixels_per_second
+                    for item in queue_statuses
+                    if item.average_speed_pixels_per_second is not None
+                ] or [
+                    item.average_speed_pixels_per_second
+                    for item in vertical_rows
+                    if item.average_speed_pixels_per_second is not None
+                ]
+                live_metrics = {
+                    "current_people": confirmed_humans,
+                    "total_unique_people": len(unique_track_ids),
+                    "active_tracks": len(observations),
+                    "lost_tracks": lost_tracks,
+                    "entry_count": snapshot.cumulative_entries,
+                    "exit_count": snapshot.cumulative_exits,
+                    "zone_occupancy": {
+                        item.zone_id: item.current for item in snapshot.occupancy
+                    },
+                    "restricted_occupancy": restricted_occupancy,
+                    "restricted_violations": restricted_events,
+                    "queue_length": sum(queue_lengths) if queue_lengths else None,
+                    "queue_wait_seconds": sum(queue_waits) / len(queue_waits) if queue_waits else None,
+                    "queue_speed": sum(queue_speeds) / len(queue_speeds) if queue_speeds else None,
+                    "average_person_speed": (
+                        speed_result.snapshot.average_speed_pixels_per_second
+                        if speed_result is not None else None
+                    ),
+                    "processing_fps": 1000.0 / max(total_ms / frames, 0.001),
+                    "frame_count": frames,
+                    "progress": min(100.0, frames * 100.0 / reporter.total_frames) if reporter.total_frames else None,
+                    "elapsed_seconds": reporter.elapsed,
+                }
+                preview_frame = final_frame
+                if heatmaps is not None:
+                    preview_frame = overlay_heatmap(
+                        final_frame,
+                        colorize_heatmap(
+                            heatmap_snapshot.image.occupancy,
+                            color_map=(heatmap_settings.color_map if heatmap_settings else "jet"),
+                            output_size=(width, height),
+                            smoothing_sigma_cells=(
+                                heatmap_settings.smoothing_sigma_cells if heatmap_settings else 1.0
+                            ),
+                        ),
+                        opacity=(heatmap_settings.opacity if heatmap_settings else 0.55),
+                    )
+                reporter.publish(frames - 1, live_metrics, frame=preview_frame)
     finally:
         capture.release()
         writer.release()
@@ -599,6 +705,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if frames == 0:
         raise RuntimeError(f"video contained no readable frames: {source}")
+    reporter.publish(frames - 1, live_metrics, frame=preview_frame, force=True)
     heatmap_exports: dict[str, object] | None = None
     if heatmaps is not None:
         assert heatmap_directory is not None
@@ -643,6 +750,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             {
                 "frames": frames,
                 "fps": fps,
+                "frame_stride": args.frame_stride,
                 "processing_fps": 1000.0 / (total_ms / frames),
                 "maximum_confirmed_humans": maximum_confirmed,
                 "maximum_total_zone_occupancy": maximum_occupancy,

@@ -1,7 +1,10 @@
 from pathlib import Path
+import json
 
 import app.api.jobs as jobs_module
+import numpy as np
 from app.api.jobs import JobManager, _last_json_object
+from app.api.live import LiveReporter, processing_frame_size
 from app.api.presets import APPLICATIONS, get_application
 
 
@@ -10,6 +13,12 @@ def test_application_catalog_has_unique_ids() -> None:
     assert len(identifiers) == len(set(identifiers))
     assert {"detection", "people_counting", "heatmap", "vertical_queue"} <= set(
         identifiers
+    )
+    assert all(item.metrics for item in APPLICATIONS)
+    assert all(
+        definition.display in {"card", "chart", "status", "counter", "table"}
+        for item in APPLICATIONS
+        for definition in item.metrics
     )
 
 
@@ -42,6 +51,8 @@ def test_job_command_uses_existing_analytics_cli(tmp_path: Path) -> None:
     assert "--enable-queue" in command
     assert command[command.index("--queue-mode") + 1] == "vertical"
     assert command[command.index("--max-frames") + 1] == "25"
+    assert command[command.index("--processing-width") + 1] == "1280"
+    assert command[command.index("--frame-stride") + 1] == "5"
     assert expected["counts_csv"] == job_dir / "counts.csv"
 
 
@@ -135,3 +146,58 @@ def test_last_json_object_ignores_leading_output() -> None:
         "frames": 12,
         "ok": True,
     }
+
+
+def test_live_reporter_persists_sampled_preview_metrics_and_events(tmp_path: Path) -> None:
+    reporter = LiveReporter(
+        tmp_path,
+        "job-live",
+        total_frames=10,
+        metric_interval=10,
+        preview_interval=10,
+    )
+    reporter.publish(
+        1,
+        {"current_people": 2, "processing_fps": 12.5},
+        frame=np.zeros((720, 1280, 3), dtype=np.uint8),
+        force=True,
+    )
+
+    assert (tmp_path / "preview.jpg").is_file()
+    assert (tmp_path / "metrics.jsonl").is_file()
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert {event["type"] for event in events} == {
+        "preview_updated",
+        "metrics_updated",
+        "progress_updated",
+    }
+    assert events[-1]["job_id"] == "job-live"
+    assert events[-1]["progress"] == 20.0
+    assert events[-1]["preview_reference"] == "/api/v1/jobs/job-live/preview"
+
+
+def test_cancel_request_is_persisted_for_running_process(tmp_path: Path) -> None:
+    manager = JobManager(tmp_path)
+    job_dir = tmp_path / "job-cancel"
+    job_dir.mkdir()
+    source = job_dir / "input.mp4"
+    source.touch()
+    record = manager.register(
+        job_id="job-cancel",
+        application_id="tracking",
+        original_filename="shop.mp4",
+        camera_id="camera",
+        input_video=source,
+        camera_config=None,
+        max_frames=None,
+    )
+
+    cancelled = manager.cancel(record.id)
+
+    assert cancelled.status == "cancelling"
+    assert (job_dir / "cancel.requested").is_file()
+
+
+def test_dashboard_processing_size_preserves_aspect_ratio_and_avoids_upscale() -> None:
+    assert processing_frame_size(3840, 2160, 1280) == (1280, 720)
+    assert processing_frame_size(640, 480, 1280) == (640, 480)

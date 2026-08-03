@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import re
 import shutil
-from typing import Annotated
+import time
+from typing import Annotated, Iterator
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
@@ -27,6 +29,8 @@ ALLOWED_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".m
 manager = JobManager(
     JOBS_ROOT,
     max_workers=int(os.environ.get("VIDEO_ANALYTICS_JOB_WORKERS", "1")),
+    processing_width=int(os.environ.get("VIDEO_ANALYTICS_PROCESSING_WIDTH", "1280")),
+    frame_stride=int(os.environ.get("VIDEO_ANALYTICS_FRAME_STRIDE", "10")),
 )
 
 app = FastAPI(title="Video Analytics MVP API", version="0.1.0")
@@ -67,6 +71,56 @@ def get_job(job_id: str) -> dict[str, object]:
         return {"data": manager.public_dict(manager.get(job_id))}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/jobs/{job_id}/cancel", status_code=202)
+def cancel_job(job_id: str) -> dict[str, object]:
+    try:
+        return {"data": manager.public_dict(manager.cancel(job_id))}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/jobs/{job_id}/events")
+def stream_job_events(
+    job_id: str,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    after: Annotated[int | None, Query(ge=0)] = None,
+) -> StreamingResponse:
+    try:
+        manager.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    cursor = after or 0
+    if last_event_id and last_event_id.isdigit():
+        cursor = max(cursor, int(last_event_id))
+    return StreamingResponse(
+        _event_stream(job_id, cursor),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/v1/jobs/{job_id}/preview")
+def job_preview(job_id: str) -> FileResponse:
+    try:
+        path = manager.job_file(job_id, "preview.jpg")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/v1/jobs/{job_id}/preview-stream")
+def job_preview_stream(job_id: str) -> StreamingResponse:
+    try:
+        manager.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StreamingResponse(
+        _preview_stream(job_id),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/v1/jobs", status_code=202)
@@ -165,6 +219,86 @@ async def _save_upload(upload: UploadFile, destination: Path, *, limit: int) -> 
             stream.write(chunk)
     if written == 0:
         raise HTTPException(status_code=422, detail="uploaded file is empty")
+
+
+def _event_stream(job_id: str, cursor: int) -> Iterator[str]:
+    """Tail persisted JSONL events; line numbers are stable resumable SSE IDs."""
+
+    idle_started = time.monotonic()
+    stream = None
+    line_number = 0
+    terminal_seen_at: float | None = None
+    try:
+        while True:
+            try:
+                record = manager.get(job_id)
+            except KeyError:
+                return
+            path = Path(record.job_directory) / "events.jsonl"
+            if stream is None and path.is_file():
+                try:
+                    stream = path.open("r", encoding="utf-8")
+                    while line_number < cursor and stream.readline():
+                        line_number += 1
+                except OSError:
+                    stream = None
+            line = stream.readline() if stream is not None else ""
+            if line:
+                line_number += 1
+                try:
+                    event_type = str(json.loads(line).get("type", "message"))
+                except (json.JSONDecodeError, AttributeError):
+                    event_type = "message"
+                yield f"id: {line_number}\nevent: {event_type}\ndata: {line.rstrip()}\n\n"
+                idle_started = time.monotonic()
+                continue
+            if record.status in {"completed", "failed", "cancelled"}:
+                terminal_seen_at = terminal_seen_at or time.monotonic()
+                if time.monotonic() - terminal_seen_at >= 0.5:
+                    return
+            else:
+                terminal_seen_at = None
+            if time.monotonic() - idle_started >= 15.0:
+                yield ": keep-alive\n\n"
+                idle_started = time.monotonic()
+            time.sleep(0.25)
+    finally:
+        if stream is not None:
+            stream.close()
+
+
+def _preview_stream(job_id: str) -> Iterator[bytes]:
+    """Stream completed JPEGs over one connection, retaining the last browser frame."""
+
+    last_modified = -1
+    terminal_seen_at: float | None = None
+    while True:
+        try:
+            record = manager.get(job_id)
+        except KeyError:
+            return
+        preview = Path(record.job_directory) / "preview.jpg"
+        try:
+            modified = preview.stat().st_mtime_ns
+            if modified != last_modified:
+                image = preview.read_bytes()
+                last_modified = modified
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                    + str(len(image)).encode("ascii")
+                    + b"\r\n\r\n"
+                    + image
+                    + b"\r\n"
+                )
+        except OSError:
+            pass
+        if record.status in {"completed", "failed", "cancelled"}:
+            terminal_seen_at = terminal_seen_at or time.monotonic()
+            if time.monotonic() - terminal_seen_at >= 1.0:
+                return
+        else:
+            terminal_seen_at = None
+        time.sleep(0.05)
 
 
 if __name__ == "__main__":

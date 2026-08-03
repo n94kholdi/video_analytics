@@ -57,6 +57,7 @@ class ByteTrackAdapter:
         frame_rate: float = 30.0,
         confirmation_frames: int = 2,
         smoothing_alpha: float = 0.35,
+        frame_size: tuple[int, int] | None = None,
     ) -> None:
         _unit_interval(activation_threshold, "activation_threshold")
         _unit_interval(match_threshold, "match_threshold")
@@ -69,21 +70,31 @@ class ByteTrackAdapter:
             raise ValueError("confirmation_frames must be positive")
         if not math.isfinite(frame_rate) or frame_rate <= 0:
             raise ValueError("frame_rate must be finite and positive")
+        if frame_size is not None and (frame_size[0] <= 0 or frame_size[1] <= 0):
+            raise ValueError("frame_size must contain positive width and height")
 
         self.history_size = history_size
         self.smoothing_alpha = smoothing_alpha
+        self.frame_size = frame_size
         # Trackers 2.5 emits deprecation-library warnings during construction;
         # they are external packaging warnings, not tracker behavior warnings.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
-            self._tracker = ByteTrackTracker(
-                lost_track_buffer=lost_track_buffer,
-                frame_rate=frame_rate,
-                track_activation_threshold=activation_threshold,
-                minimum_consecutive_frames=confirmation_frames,
-                minimum_iou_threshold=match_threshold,
-                high_conf_det_threshold=activation_threshold,
-            )
+            try:
+                self._tracker = ByteTrackTracker(
+                    lost_track_buffer=lost_track_buffer,
+                    frame_rate=frame_rate,
+                    track_activation_threshold=activation_threshold,
+                    minimum_consecutive_frames=confirmation_frames,
+                    minimum_iou_threshold=match_threshold,
+                    high_conf_det_threshold=activation_threshold,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "ByteTrack initialization failed; verify trackers==2.5.x and tracker "
+                    f"thresholds (activation={activation_threshold}, match={match_threshold}, "
+                    f"buffer={lost_track_buffer}, fps={frame_rate}): {exc}"
+                ) from exc
         self._histories: dict[int, deque[TrajectoryPoint]] = {}
         self._tracklet_ids: dict[int, int] = {}
         self._next_track_id = 1
@@ -100,9 +111,17 @@ class ByteTrackAdapter:
         """Advance ByteTrack and retain only observations seen in this frame."""
 
         self._validate_frame(camera_id, timestamp, frame_index)
+        self._validate_detections(detections, frame_index)
         started = perf_counter()
         tracker_input = detections_to_supervision(detections)
-        tracked = self._tracker.update(tracker_input)
+        try:
+            tracked = self._tracker.update(tracker_input)
+        except Exception as exc:
+            raise RuntimeError(
+                "ByteTrack update failed at frame "
+                f"{frame_index} with {len(tracker_input)} person detections "
+                f"(bbox format=xyxy, frame_size={self.frame_size}): {exc}"
+            ) from exc
 
         active_tracklets = [
             tracklet
@@ -198,6 +217,25 @@ class ByteTrackAdapter:
             raise ValueError("frame_index must be non-negative")
         if self._last_frame_index is not None and frame_index <= self._last_frame_index:
             raise ValueError("frame_index must increase on every update")
+
+    def _validate_detections(
+        self, detections: Sequence[Detection], frame_index: int
+    ) -> None:
+        if self.frame_size is None:
+            return
+        width, height = self.frame_size
+        for index, detection in enumerate(detections):
+            x1, y1, x2, y2 = detection.xyxy
+            if x2 <= x1 or y2 <= y1:
+                raise ValueError(
+                    f"invalid zero-area xyxy detection {index} at frame {frame_index}: {detection.xyxy}"
+                )
+            tolerance = 1.0
+            if x1 < -tolerance or y1 < -tolerance or x2 > width + tolerance or y2 > height + tolerance:
+                raise ValueError(
+                    f"xyxy detection {index} is outside {width}x{height} frame at frame "
+                    f"{frame_index}: {detection.xyxy}"
+                )
 
 
 def _match_rows_to_tracklets(

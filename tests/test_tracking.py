@@ -114,3 +114,15 @@ def test_reset_allows_frame_indices_to_restart() -> None:
     result = tracker.update([person(0.0)], camera_id="cam", timestamp=0.0, frame_index=0)
 
     assert result.observations[0].track_id == 1
+
+
+def test_tracker_reports_bbox_and_frame_dimensions_for_invalid_detection() -> None:
+    tracker = ByteTrackAdapter(frame_size=(100, 80))
+
+    with pytest.raises(ValueError, match=r"xyxy.*outside 100x80 frame"):
+        tracker.update(
+            [Detection((90.0, 10.0, 120.0, 50.0), 0.9)],
+            camera_id="cam",
+            timestamp=0.0,
+            frame_index=0,
+        )

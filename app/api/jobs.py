@@ -13,13 +13,14 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 
 from app.api.presets import ApplicationPreset, get_application
 from app.core.config import PROJECT_ROOT
 
 
-TERMINAL_STATUSES = frozenset({"completed", "failed"})
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 def _now() -> str:
@@ -53,17 +54,27 @@ class JobManager:
         *,
         python_executable: str | None = None,
         max_workers: int = 1,
+        processing_width: int = 1280,
+        frame_stride: int = 5,
     ) -> None:
         if max_workers <= 0:
             raise ValueError("max_workers must be positive")
+        if processing_width < 2:
+            raise ValueError("processing_width must be at least 2")
+        if frame_stride <= 0:
+            raise ValueError("frame_stride must be positive")
         self.root = root.expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.python_executable = python_executable or sys.executable
+        self.processing_width = processing_width
+        self.frame_stride = frame_stride
         self._jobs: dict[str, JobRecord] = {}
         self._lock = threading.RLock()
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="video-analytics-job"
         )
+        self._futures: dict[str, Future[None]] = {}
+        self._processes: dict[str, subprocess.Popen[str]] = {}
         self._load_existing()
 
     def register(
@@ -95,6 +106,7 @@ class JobManager:
         with self._lock:
             self._jobs[job_id] = record
             self._save(record)
+            self._save_configuration(record)
         return record
 
     def list(self) -> list[JobRecord]:
@@ -111,29 +123,63 @@ class JobManager:
     def run(self, job_id: str) -> None:
         record = self.get(job_id)
         preset = get_application(record.application_id)
+        if (Path(record.job_directory) / "cancel.requested").exists():
+            self._update(record, status="cancelled", error=None)
+            self._append_event(record, "job_cancelled", status="cancelled")
+            return
         self._update(record, status="running", error=None)
+        self._append_event(record, "job_started", status="running")
         command, expected = self._build_command(record, preset)
         job_dir = Path(record.job_directory)
         log_path = job_dir / "process.log"
+        stdout_path = job_dir / "stdout.log"
+        stderr_path = job_dir / "stderr.log"
         try:
-            completed = subprocess.run(
-                command,
-                cwd=PROJECT_ROOT,
-                env=os.environ.copy(),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
+                "w", encoding="utf-8"
+            ) as stderr:
+                process = subprocess.Popen(
+                    command,
+                    cwd=PROJECT_ROOT,
+                    env=os.environ.copy(),
+                    stdout=stdout,
+                    stderr=stderr,
+                    text=True,
+                )
+                with self._lock:
+                    self._processes[job_id] = process
+                while process.poll() is None:
+                    time.sleep(0.2)
+                returncode = process.returncode
+            with self._lock:
+                self._processes.pop(job_id, None)
+            process_stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
+            process_stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
             log_path.write_text(
-                f"$ {' '.join(command)}\n\nSTDOUT\n{completed.stdout}\n\nSTDERR\n{completed.stderr}",
+                f"$ {' '.join(command)}\n\nSTDOUT\n{process_stdout}\n\nSTDERR\n{process_stderr}",
                 encoding="utf-8",
             )
-            if completed.returncode != 0:
-                detail = completed.stderr.strip() or completed.stdout.strip()
-                raise RuntimeError(detail[-6000:] or f"process exited with {completed.returncode}")
+            cancelled = (job_dir / "cancel.requested").exists()
+            if cancelled:
+                self._update(record, status="cancelled", error=None)
+                self._append_event(record, "job_cancelled", status="cancelled")
+                return
+            if returncode != 0:
+                detail = process_stderr.strip() or process_stdout.strip()
+                raise RuntimeError(detail[-6000:] or f"process exited with {returncode}")
 
             artifacts = self._collect_artifacts(record, expected, log_path)
-            summary = _last_json_object(completed.stdout)
+            summary = _last_json_object(process_stdout)
+            live_state = _read_json(job_dir / "live_state.json") or {}
+            final_metrics = {
+                **(live_state.get("metrics") if isinstance(live_state.get("metrics"), dict) else {}),
+                **(summary or {}),
+            }
+            if final_metrics:
+                (job_dir / "final_metrics.json").write_text(
+                    json.dumps(final_metrics, indent=2), encoding="utf-8"
+                )
+                artifacts["final_metrics"] = str((job_dir / "final_metrics.json").resolve())
             self._update(
                 record,
                 status="completed",
@@ -141,15 +187,36 @@ class JobManager:
                 artifacts=artifacts,
                 error=None,
             )
+            self._append_event(
+                record, "job_completed", status="completed", metrics=final_metrics
+            )
         except Exception as exc:
+            with self._lock:
+                self._processes.pop(job_id, None)
             artifacts = {"process_log": str(log_path)} if log_path.is_file() else {}
             self._update(record, status="failed", error=str(exc), artifacts=artifacts)
+            self._append_event(
+                record, "job_failed", status="failed", message=str(exc)
+            )
 
     def enqueue(self, job_id: str) -> Future[None]:
         """Submit a job without blocking the HTTP request thread."""
 
         self.get(job_id)
-        return self._executor.submit(self.run, job_id)
+        future = self._executor.submit(self.run, job_id)
+        with self._lock:
+            self._futures[job_id] = future
+        return future
+
+    def cancel(self, job_id: str) -> JobRecord:
+        record = self.get(job_id)
+        if record.status in TERMINAL_STATUSES:
+            return record
+        job_dir = Path(record.job_directory)
+        (job_dir / "cancel.requested").touch()
+        self._update(record, status="cancelling")
+        self._append_event(record, "warning", status="cancelling", message="Cancellation requested")
+        return record
 
     def public_dict(self, record: JobRecord) -> dict[str, Any]:
         data = asdict(record)
@@ -157,6 +224,13 @@ class JobManager:
         data.pop("input_video")
         data.pop("camera_config")
         data["application"] = get_application(record.application_id).public_dict()
+        state_path = Path(record.job_directory) / "live_state.json"
+        data["live"] = _read_json(state_path)
+        data["preview_url"] = (
+            f"/api/v1/jobs/{record.id}/preview"
+            if (Path(record.job_directory) / "preview.jpg").is_file()
+            else None
+        )
         data["artifacts"] = {
             key: {
                 "filename": Path(path).name,
@@ -167,6 +241,13 @@ class JobManager:
             if Path(path).is_file()
         }
         return data
+
+    def job_file(self, job_id: str, filename: str) -> Path:
+        record = self.get(job_id)
+        path = Path(record.job_directory) / filename
+        if not path.is_file():
+            raise KeyError(f"job file not found: {filename}")
+        return path
 
     def artifact_path(self, job_id: str, key: str) -> Path:
         record = self.get(job_id)
@@ -185,7 +266,7 @@ class JobManager:
         job_dir = Path(record.job_directory)
         raw_video = job_dir / "annotated_raw.mp4"
         counts_csv = job_dir / "counts.csv"
-        events_jsonl = job_dir / "events.jsonl"
+        events_jsonl = job_dir / "analytics_events.jsonl"
         heatmap_dir = job_dir / "heatmaps"
         command = [
             self.python_executable,
@@ -194,12 +275,20 @@ class JobManager:
             record.input_video,
             "--output",
             str(raw_video),
+            "--live-dir",
+            str(job_dir),
+            "--job-id",
+            record.id,
+            "--processing-width",
+            str(self.processing_width),
+            "--frame-stride",
+            str(self.frame_stride),
         ]
         expected = {"annotated_video_raw": raw_video}
         if preset.module == "app.analytics.cli":
             command.extend(("--counts-csv", str(counts_csv), "--events-jsonl", str(events_jsonl)))
             expected["counts_csv"] = counts_csv
-            expected["events_jsonl"] = events_jsonl
+            expected["analytics_events"] = events_jsonl
             if "--enable-heatmap" in preset.arguments:
                 command.extend(("--heatmap-dir", str(heatmap_dir)))
         # A dashboard camera YAML describes analytics geometry.  The standalone
@@ -237,6 +326,15 @@ class JobManager:
                     else:
                         artifacts["heatmap_video"] = str(path.resolve())
         artifacts["process_log"] = str(log_path.resolve())
+        for key, filename in (
+            ("events", "events.jsonl"),
+            ("metric_time_series", "metrics.jsonl"),
+            ("tracking_results", "tracking.jsonl"),
+            ("configuration", "configuration.json"),
+        ):
+            path = Path(record.job_directory) / filename
+            if path.is_file():
+                artifacts[key] = str(path.resolve())
         return artifacts
 
     def _update(self, record: JobRecord, **changes: Any) -> None:
@@ -252,12 +350,57 @@ class JobManager:
         temporary.write_text(json.dumps(asdict(record), indent=2), encoding="utf-8")
         temporary.replace(path)
 
+    def _save_configuration(self, record: JobRecord) -> None:
+        payload = {
+            "job_id": record.id,
+            "application_id": record.application_id,
+            "camera_id": record.camera_id,
+            "original_filename": record.original_filename,
+            "input_video": Path(record.input_video).name,
+            "camera_config": Path(record.camera_config).name if record.camera_config else None,
+            "max_frames": record.max_frames,
+            "processing_width": self.processing_width,
+            "frame_stride": self.frame_stride,
+            "created_at": record.created_at,
+        }
+        (Path(record.job_directory) / "configuration.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+
+    def _append_event(
+        self,
+        record: JobRecord,
+        event_type: str,
+        *,
+        status: str,
+        metrics: dict[str, Any] | None = None,
+        message: str | None = None,
+    ) -> None:
+        state = _read_json(Path(record.job_directory) / "live_state.json") or {}
+        payload = {
+            "type": event_type,
+            "job_id": record.id,
+            "timestamp": _now(),
+            "status": status,
+            "frame_index": state.get("frame_index"),
+            "progress": 100.0 if status == "completed" else state.get("progress"),
+            "elapsed_seconds": state.get("elapsed_seconds", 0.0),
+            "metrics": metrics if metrics is not None else state.get("metrics", {}),
+            "preview_reference": state.get("preview_reference"),
+            "message": message,
+        }
+        with (Path(record.job_directory) / "events.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        temporary = Path(record.job_directory) / "live_state.json.tmp"
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(Path(record.job_directory) / "live_state.json")
+
     def _load_existing(self) -> None:
         for metadata in self.root.glob("*/job.json"):
             try:
                 values = json.loads(metadata.read_text(encoding="utf-8"))
                 record = JobRecord(**values)
-                if record.status in {"queued", "running"}:
+                if record.status in {"queued", "running", "cancelling"}:
                     record.status = "failed"
                     record.error = "The analytics service stopped before this job finished."
                     record.updated_at = _now()
@@ -265,6 +408,14 @@ class JobManager:
                 self._jobs[record.id] = record
             except (OSError, TypeError, ValueError, json.JSONDecodeError):
                 continue
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _make_browser_video(source: Path, destination: Path) -> bool:
