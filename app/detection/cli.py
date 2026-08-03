@@ -167,6 +167,8 @@ def _run_video(
     return {
         "input_type": "video",
         "frames": frames,
+        "fps": fps,
+        "processing_fps": 1000.0 / _timing_summary(timings)["total"],
         "detections": detections,
         "average_timings_ms": _timing_summary(timings),
         "output": str(output.resolve()),

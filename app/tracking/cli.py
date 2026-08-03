@@ -130,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         json.dumps(
             {
                 "frames": frames,
+                "fps": fps,
+                "processing_fps": 1000.0 / (total_ms / frames),
                 "track_observations": observations,
                 "average_timings_ms": {
                     "detection": detection_ms / frames,

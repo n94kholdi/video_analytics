@@ -6,8 +6,9 @@ remain outside this directory and are treated as read-only inputs.
 
 Phase 9 adds timestamp-window movement speed in explicitly labelled pixels per
 second and, only with valid metre-based ground calibration, metres per second.
-It also adds queue progress toward each configured service point. Database,
-API, and dashboard behavior remain intentionally unimplemented.
+It also adds queue progress toward each configured service point. A FastAPI
+integration layer now exposes recorded-video upload jobs and their generated
+artifacts to the Tarebar dashboard.
 
 ## Planned scope
 
@@ -238,6 +239,33 @@ From this directory:
 python -m pip install -e ".[dev]"
 python -m pytest
 python scripts/check_imports.py
+```
+
+### Run the dashboard integration API
+
+Install the API dependencies and start the service from this directory:
+
+```bash
+python -m pip install -e ".[api,dev]"
+python -m uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+```
+
+OpenAPI documentation is available at `http://localhost:8000/docs`. Uploaded
+videos and generated artifacts from the dashboard are stored under
+`output/dashboard/<job-id>/`.
+The API exposes detection, tracking, counting, restricted-area, heatmap,
+vertical-queue, configured-queue, and combined-analysis presets. Applications
+that depend on configured polygons require a camera YAML upload; the other
+presets can run using only a recorded video.
+
+Useful environment settings:
+
+```text
+VIDEO_ANALYTICS_JOBS_DIR=/path/to/job-storage
+VIDEO_ANALYTICS_JOB_WORKERS=1
+VIDEO_ANALYTICS_MAX_UPLOAD_BYTES=1073741824
+VIDEO_ANALYTICS_CORS_ORIGINS=http://localhost:3000
+VIDEO_ANALYTICS_DETECTOR_MODEL=/absolute/path/to/model.onnx
 ```
 
 Load the default settings:

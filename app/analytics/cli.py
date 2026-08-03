@@ -642,6 +642,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         json.dumps(
             {
                 "frames": frames,
+                "fps": fps,
+                "processing_fps": 1000.0 / (total_ms / frames),
                 "maximum_confirmed_humans": maximum_confirmed,
                 "maximum_total_zone_occupancy": maximum_occupancy,
                 "line_crossed_events": events,
