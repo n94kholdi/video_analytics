@@ -152,6 +152,34 @@ def test_multiple_tracks_count_independently_and_unconfirmed_tracks_are_ignored(
     assert result.snapshot.cumulative_entries == 2
 
 
+def test_tracker_ids_drive_current_and_run_unique_people_counts() -> None:
+    counter = _counter()
+
+    first = counter.update(
+        "cam-a",
+        [
+            _observation(7, (20, 20)),
+            _observation(7, (21, 21)),  # duplicate tracker output is harmless
+            _observation(8, (40, 40), confirmed=False),
+        ],
+    ).snapshot
+    second = counter.update(
+        "cam-a",
+        [_observation(7, (22, 22), timestamp=2), _observation(9, (60, 60), timestamp=2)],
+    ).snapshot
+    empty = counter.update("cam-a", [], timestamp=3).snapshot
+
+    assert first.current_track_ids == (7,)
+    assert first.current_people == 1
+    assert first.unique_track_ids == (7,)
+    assert second.current_track_ids == (7, 9)
+    assert second.current_people == 2
+    assert second.total_unique_people == 2
+    assert empty.current_people == 0
+    assert empty.unique_track_ids == (7, 9)
+    assert empty.total_unique_people == 2
+
+
 def test_track_disappearance_clears_occupancy_and_breaks_crossing_history() -> None:
     counter = _counter(zones=(_zone("floor"),), lines=(_line(),))
     counter.update("cam-a", [_observation(1, (50, 40))])
@@ -172,6 +200,8 @@ def test_explicit_state_reset_starts_a_new_processing_run() -> None:
     counter.reset()
 
     assert counter.snapshot("cam-a").cumulative_entries == 0
+    assert counter.snapshot("cam-a").current_people == 0
+    assert counter.snapshot("cam-a").total_unique_people == 0
     assert counter.update("cam-a", [_observation(1, (50, 40), timestamp=3)]).events == ()
 
 

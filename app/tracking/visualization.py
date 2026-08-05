@@ -17,6 +17,8 @@ def annotate_tracks(
     *,
     tracking_ms: float | None = None,
     show_trajectories: bool = True,
+    current_people: int | None = None,
+    total_unique_people: int | None = None,
 ) -> NDArray[np.uint8]:
     """Draw track metadata and optionally draw smoothed trajectory trails."""
 
@@ -60,6 +62,25 @@ def annotate_tracks(
             annotated,
             f"tracking {tracking_ms:.1f} ms",
             (10, 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    count_rows = (
+        *(() if current_people is None else (f"people now: {current_people}",)),
+        *(
+            ()
+            if total_unique_people is None
+            else (f"unique people total: {total_unique_people}",)
+        ),
+    )
+    for index, text in enumerate(count_rows):
+        cv2.putText(
+            annotated,
+            text,
+            (10, 50 + index * 26),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
             (255, 255, 255),

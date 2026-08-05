@@ -18,21 +18,22 @@ def annotate_people_counts(
     restricted_snapshot: RestrictedAreaSnapshot | None = None,
     copy: bool = True,
 ) -> NDArray[np.uint8]:
-    """Add visible-track, zone occupancy, and line totals to a frame."""
+    """Add live/cumulative unique people, occupancy, and line totals to a frame."""
 
     annotated = frame.copy() if copy else frame
     rows = [
-        *(
-            (f"confirmed humans: {confirmed_humans}",)
-            if confirmed_humans is not None
-            else ()
-        ),
+        f"people now: {snapshot.current_people}",
+        f"unique people total: {snapshot.total_unique_people}",
         *(f"occupancy {item.zone_id}: {item.current}" for item in snapshot.occupancy),
         *(
             f"line {item.line_id}: entries {item.entries} exits {item.exits}"
             for item in snapshot.lines
         ),
     ]
+    # Kept for callers using an older independently calculated value. The
+    # tracker-ID-derived snapshot remains the source of truth when they agree.
+    if confirmed_humans is not None and confirmed_humans != snapshot.current_people:
+        rows.insert(1, f"confirmed observations: {confirmed_humans}")
     if restricted_snapshot is not None:
         rows.extend(
             (

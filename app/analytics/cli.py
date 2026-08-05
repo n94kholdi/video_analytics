@@ -331,7 +331,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     maximum_occupancy = 0
     total_ms = 0.0
     reference_frame = None
-    unique_track_ids: set[int] = set()
     lost_tracks = 0
     zone_ids = tuple(zone.zone_id for zone in camera_counting.occupancy_zones)
     restricted_zone_ids = (
@@ -375,6 +374,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "frame_index",
                     "timestamp_seconds",
                     "confirmed_humans",
+                    "total_unique_people",
                     "total_zone_occupancy",
                     *(f"occupancy_{zone_id}" for zone_id in zone_ids),
                     "cumulative_entries",
@@ -418,7 +418,6 @@ def main(argv: Sequence[str] | None = None) -> None:
                     timestamp=timestamp,
                     frame_index=frames,
                 )
-                unique_track_ids.update(item.track_id for item in tracked.observations)
                 lost_tracks += len(tracked.expired_track_ids)
                 speed_result = (
                     speed_estimator.update(
@@ -480,10 +479,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                             if observation.confirmed
                         ),
                     )
-                confirmed_humans = sum(
-                    observation.confirmed for observation in observations
-                )
                 snapshot = counted.snapshot
+                confirmed_humans = snapshot.current_people
                 annotated = annotate_tracks(
                     frame,
                     observations,
@@ -593,6 +590,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                         frames,
                         f"{timestamp:.6f}",
                         confirmed_humans,
+                        snapshot.total_unique_people,
                         snapshot.current_occupancy,
                         *(snapshot.occupancy_for(zone_id) for zone_id in zone_ids),
                         snapshot.cumulative_entries,
@@ -660,7 +658,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 ]
                 live_metrics = {
                     "current_people": confirmed_humans,
-                    "total_unique_people": len(unique_track_ids),
+                    "total_unique_people": snapshot.total_unique_people,
                     "active_tracks": len(observations),
                     "lost_tracks": lost_tracks,
                     "entry_count": snapshot.cumulative_entries,
@@ -753,6 +751,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "frame_stride": args.frame_stride,
                 "processing_fps": 1000.0 / (total_ms / frames),
                 "maximum_confirmed_humans": maximum_confirmed,
+                "total_unique_people": snapshot.total_unique_people,
                 "maximum_total_zone_occupancy": maximum_occupancy,
                 "line_crossed_events": events,
                 "restricted_area_enabled": restricted is not None,

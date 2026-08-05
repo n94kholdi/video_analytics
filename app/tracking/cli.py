@@ -149,16 +149,21 @@ def main(argv: Sequence[str] | None = None) -> None:
                 timestamp=timestamp,
                 frame_index=frames,
             )
+            current_track_ids = {
+                item.track_id for item in tracked.observations if item.confirmed
+            }
+            unique_track_ids.update(current_track_ids)
             annotated = annotate_tracks(
                     frame,
                     tracked.observations,
                     tracking_ms=tracked.tracking_ms,
                     show_trajectories=args.show_trajectories,
+                    current_people=len(current_track_ids),
+                    total_unique_people=len(unique_track_ids),
                 )
             writer.write(annotated)
             frames += 1
             observations += len(tracked.observations)
-            unique_track_ids.update(item.track_id for item in tracked.observations)
             lost_tracks += len(tracked.expired_track_ids)
             if tracking_stream is not None:
                 tracking_stream.write(json.dumps({
@@ -179,7 +184,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             tracking_ms += tracked.tracking_ms
             total_ms += (perf_counter() - frame_started) * 1000.0
             latest_metrics = {
-                    "current_people": sum(item.confirmed for item in tracked.observations),
+                    "current_people": len(current_track_ids),
                     "total_unique_people": len(unique_track_ids),
                     "active_tracks": len(tracked.observations),
                     "lost_tracks": lost_tracks,
@@ -209,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "frame_stride": args.frame_stride,
                 "processing_fps": 1000.0 / (total_ms / frames),
                 "track_observations": observations,
+                "total_unique_people": len(unique_track_ids),
                 "average_timings_ms": {
                     "detection": detection_ms / frames,
                     "tracking": tracking_ms / frames,

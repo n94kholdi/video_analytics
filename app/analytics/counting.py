@@ -75,6 +75,20 @@ class CountingSnapshot:
     timestamp: float
     occupancy: tuple[OccupancyCount, ...]
     lines: tuple[LineCount, ...]
+    current_track_ids: tuple[int, ...] = ()
+    unique_track_ids: tuple[int, ...] = ()
+
+    @property
+    def current_people(self) -> int:
+        """Number of distinct confirmed tracker IDs visible in this frame."""
+
+        return len(self.current_track_ids)
+
+    @property
+    def total_unique_people(self) -> int:
+        """Number of distinct confirmed tracker IDs seen since the last reset."""
+
+        return len(self.unique_track_ids)
 
     @property
     def current_occupancy(self) -> int:
@@ -119,6 +133,8 @@ class PeopleCounter:
         self._line_totals: dict[str, dict[str, list[int]]] = {}
         self._line_states: dict[str, dict[tuple[str, int], _TrackLineState]] = {}
         self._occupancy: dict[str, dict[str, int]] = {}
+        self._current_track_ids: dict[str, set[int]] = {}
+        self._seen_track_ids: dict[str, set[int]] = {}
         self._timestamps: dict[str, float] = {}
         self.reset()
 
@@ -137,6 +153,8 @@ class PeopleCounter:
             self._occupancy[target] = {
                 zone.zone_id: 0 for zone in config.occupancy_zones
             }
+            self._current_track_ids[target] = set()
+            self._seen_track_ids[target] = set()
             self._timestamps[target] = 0.0
 
     def update(
@@ -158,6 +176,8 @@ class PeopleCounter:
         # One track may only contribute once per frame. Tracker output is expected
         # to be unique, while this also makes accidental duplicates harmless.
         confirmed = {item.track_id: item for item in observations if item.confirmed}
+        self._current_track_ids[camera_id] = set(confirmed)
+        self._seen_track_ids[camera_id].update(confirmed)
         event_time = (
             timestamp
             if timestamp is not None
@@ -199,16 +219,18 @@ class PeopleCounter:
             raise KeyError(f"unknown camera: {camera_id}")
         config = self._cameras[camera_id]
         return CountingSnapshot(
-            camera_id,
-            self._timestamps[camera_id],
-            tuple(
+            camera_id=camera_id,
+            timestamp=self._timestamps[camera_id],
+            occupancy=tuple(
                 OccupancyCount(zone.zone_id, self._occupancy[camera_id][zone.zone_id])
                 for zone in config.occupancy_zones
             ),
-            tuple(
+            lines=tuple(
                 LineCount(line.line_id, *self._line_totals[camera_id][line.line_id])
                 for line in config.counting_lines
             ),
+            current_track_ids=tuple(sorted(self._current_track_ids[camera_id])),
+            unique_track_ids=tuple(sorted(self._seen_track_ids[camera_id])),
         )
 
     def _update_occupancy(

@@ -290,8 +290,10 @@ python -m app.tracking.cli input.mp4 --output outputs/tracked.mp4
 Count confirmed tracked people in every video frame. Without a camera YAML,
 the entire image is used as one occupancy zone. The command writes both an
 annotated MP4 and a CSV containing one row per frame. `confirmed_humans` is the
-visible tracked-person count; polygon columns count only foot points inside each
-configured zone:
+number of distinct confirmed tracker IDs visible in that frame, while
+`total_unique_people` is the cumulative number of confirmed IDs seen since the
+video run started. Both counts are drawn live on the annotated video. Polygon
+columns count only foot points inside each configured zone:
 
 ```bash
 python -m app.analytics.cli data/human.mp4 \
