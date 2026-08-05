@@ -47,6 +47,12 @@ def test_default_configuration_loads() -> None:
         / "Weights_final"
         / "HumanDetection_light_input_640.onnx"
     )
+    assert settings.reid_model == (
+        PROJECT_ROOT
+        / "All_weights"
+        / "Weights_final"
+        / "Tracking_osnet_x0_25_msmt17.onnx"
+    )
     assert settings.detector_confidence_threshold == 0.4
     assert settings.detector_iou_threshold == 0.7
     assert settings.tracker_activation_threshold == 0.4

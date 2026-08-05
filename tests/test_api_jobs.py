@@ -103,6 +103,34 @@ def test_tracking_command_does_not_receive_analytics_camera_config(tmp_path: Pat
     assert command[command.index("--max-frames") + 1] == "10"
 
 
+def test_admin_selected_reid_is_persisted_and_added_to_tracking_command(
+    tmp_path: Path,
+) -> None:
+    manager = JobManager(tmp_path)
+    job_dir = tmp_path / "job-reid"
+    job_dir.mkdir()
+    source = job_dir / "input.mp4"
+    source.touch()
+    record = manager.register(
+        job_id="job-reid",
+        application_id="people_counting",
+        original_filename="shop.mp4",
+        camera_id="test-camera",
+        input_video=source,
+        camera_config=None,
+        max_frames=None,
+        enable_reid=True,
+    )
+
+    command, _ = manager._build_command(record, get_application("people_counting"))
+    configuration = json.loads((job_dir / "configuration.json").read_text())
+
+    assert "--enable-reid" in command
+    assert record.enable_reid is True
+    assert manager.public_dict(record)["enable_reid"] is True
+    assert configuration["enable_reid"] is True
+
+
 def test_heatmap_occupancy_video_gets_stable_browser_artifact(
     tmp_path: Path, monkeypatch
 ) -> None:

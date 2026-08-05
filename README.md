@@ -287,6 +287,23 @@ Run person tracking with annotated IDs and trajectories:
 python -m app.tracking.cli input.mp4 --output outputs/tracked.mp4
 ```
 
+OSNet appearance re-identification is optional because it adds inference cost.
+Enable it when identity continuity after occlusion or a short disappearance is
+more important than maximum throughput:
+
+```bash
+python -m app.tracking.cli input.mp4 \
+  --enable-reid \
+  --output outputs/tracked_reid.mp4
+```
+
+The default ReID model is
+`All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx`. The dashboard
+shows the ReID checkbox only to organization administrators, leaves it off by
+default, stores the choice with the job, and labels ReID-enabled jobs. ReID
+improves tracker-ID continuity; it is not biometric identification and can
+still make mistakes when people look alike or are absent for a long time.
+
 Count confirmed tracked people in every video frame. Without a camera YAML,
 the entire image is used as one occupancy zone. The command writes both an
 annotated MP4 and a CSV containing one row per frame. `confirmed_humans` is the

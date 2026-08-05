@@ -39,6 +39,11 @@ def test_no_trajectories_cli_option_disables_display() -> None:
     assert args.show_trajectories is False
 
 
+def test_reid_is_explicitly_opt_in() -> None:
+    assert build_parser().parse_args(["input.mp4"]).enable_reid is False
+    assert build_parser().parse_args(["input.mp4", "--enable-reid"]).enable_reid is True
+
+
 def test_trajectory_line_can_be_hidden_without_hiding_track_annotation() -> None:
     frame = np.zeros((80, 80, 3), dtype=np.uint8)
     item = observation()

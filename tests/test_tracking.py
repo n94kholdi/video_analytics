@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import app.tracking.bytetrack as bytetrack_module
 from app.core.models import Detection
 from app.tracking.bytetrack import (
     ByteTrackAdapter,
@@ -126,3 +127,50 @@ def test_tracker_reports_bbox_and_frame_dimensions_for_invalid_detection() -> No
             timestamp=0.0,
             frame_index=0,
         )
+
+
+def test_osnet_gallery_reuses_confirmed_id_after_bytetrack_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeReIdentifier:
+        def __init__(self, _model_path: str, *, providers: tuple[str, ...]) -> None:
+            assert providers
+
+        def embed(self, _frame: np.ndarray, _xyxy: object) -> np.ndarray:
+            return np.asarray((1.0, 0.0), dtype=np.float32)
+
+    monkeypatch.setattr(bytetrack_module, "OsNetReIdentifier", FakeReIdentifier)
+    tracker = ByteTrackAdapter(
+        reid_model="fake.onnx",
+        lost_track_buffer=2,
+        frame_rate=30.0,
+        match_threshold=0.2,
+    )
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    tracker.update(
+        [person(0.0)], camera_id="cam", timestamp=0.0, frame_index=0, frame=frame
+    )
+    confirmed = tracker.update(
+        [person(1.0)], camera_id="cam", timestamp=0.1, frame_index=1, frame=frame
+    )
+    original_id = confirmed.observations[0].track_id
+    tracker.update([], camera_id="cam", timestamp=0.2, frame_index=2, frame=frame)
+    tracker.update([], camera_id="cam", timestamp=0.3, frame_index=3, frame=frame)
+
+    reappeared = tracker.update(
+        [person(70.0)], camera_id="cam", timestamp=0.4, frame_index=4, frame=frame
+    )
+
+    assert reappeared.observations[0].track_id == original_id
+
+
+def test_reid_requires_the_source_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeReIdentifier:
+        def __init__(self, _model_path: str, *, providers: tuple[str, ...]) -> None:
+            pass
+
+    monkeypatch.setattr(bytetrack_module, "OsNetReIdentifier", FakeReIdentifier)
+    tracker = ByteTrackAdapter(reid_model="fake.onnx")
+
+    with pytest.raises(ValueError, match="frame is required"):
+        tracker.update([person(0.0)], camera_id="cam", timestamp=0.0, frame_index=0)

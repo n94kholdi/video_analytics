@@ -40,6 +40,7 @@ class JobRecord:
     input_video: str
     camera_config: str | None = None
     max_frames: int | None = None
+    enable_reid: bool = False
     error: str | None = None
     summary: dict[str, Any] | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
@@ -87,6 +88,7 @@ class JobManager:
         input_video: Path,
         camera_config: Path | None,
         max_frames: int | None,
+        enable_reid: bool = False,
     ) -> JobRecord:
         get_application(application_id)
         now = _now()
@@ -102,6 +104,7 @@ class JobManager:
             input_video=str(input_video.resolve()),
             camera_config=str(camera_config.resolve()) if camera_config else None,
             max_frames=max_frames,
+            enable_reid=enable_reid,
         )
         with self._lock:
             self._jobs[job_id] = record
@@ -298,6 +301,8 @@ class JobManager:
             command.extend(("--camera-config", record.camera_config))
         if preset.module != "app.detection.cli":
             command.extend(("--camera-id", record.camera_id))
+            if record.enable_reid:
+                command.append("--enable-reid")
         if record.max_frames is not None:
             command.extend(("--max-frames", str(record.max_frames)))
         command.extend(preset.arguments)
@@ -359,6 +364,7 @@ class JobManager:
             "input_video": Path(record.input_video).name,
             "camera_config": Path(record.camera_config).name if record.camera_config else None,
             "max_frames": record.max_frames,
+            "enable_reid": record.enable_reid,
             "processing_width": self.processing_width,
             "frame_stride": self.frame_stride,
             "created_at": record.created_at,

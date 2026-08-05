@@ -37,6 +37,7 @@ class AppSettings:
     tracker_match_threshold: float
     tracker_history_size: int
     detector_model: Path | None = None
+    reid_model: Path | None = None
 
     @classmethod
     def from_mapping(
@@ -94,6 +95,13 @@ class AppSettings:
                 _non_empty_string(detector_value, "onnx.detector_model"),
                 base_dir,
             )
+        reid_value = onnx.get("reid_model")
+        reid_model = None
+        if reid_value is not None:
+            reid_model = _resolve_path(
+                _non_empty_string(reid_value, "onnx.reid_model"),
+                base_dir,
+            )
 
         confidence_threshold = _threshold(
             detector.get("confidence_threshold"),
@@ -134,6 +142,7 @@ class AppSettings:
             tracker_match_threshold=tracker_match_threshold,
             tracker_history_size=tracker_history_size,
             detector_model=detector_model,
+            reid_model=reid_model,
         )
 
 
@@ -186,6 +195,7 @@ def _apply_environment_overrides(
         "VIDEO_ANALYTICS_OUTPUT_DIR": "output_dir",
         "VIDEO_ANALYTICS_DATABASE_PATH": "database_path",
         "VIDEO_ANALYTICS_DETECTOR_MODEL": "detector_model",
+        "VIDEO_ANALYTICS_REID_MODEL": "reid_model",
     }
     for variable, field_name in path_overrides.items():
         if value := environment.get(variable):

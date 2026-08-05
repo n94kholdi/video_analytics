@@ -63,6 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", type=Path, help="application YAML configuration")
     parser.add_argument("--model", type=Path, help="override detector model path")
+    parser.add_argument(
+        "--enable-reid",
+        action="store_true",
+        help="enable higher-cost OSNet appearance re-identification",
+    )
+    parser.add_argument("--reid-model", type=Path, help="override OSNet ReID model path")
     parser.add_argument("--output", type=Path, help="annotated MP4 path")
     parser.add_argument("--counts-csv", type=Path, help="per-frame count CSV path")
     parser.add_argument(
@@ -153,6 +159,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     model = args.model or settings.detector_model
     if model is None:
         raise ConfigError("a detector model is required via config or --model")
+    reid_model = args.reid_model or settings.reid_model
+    if args.enable_reid and reid_model is None:
+        raise ConfigError("--enable-reid requires a ReID model via config or --reid-model")
     output = args.output or settings.output_dir / f"{source.stem}_counted.mp4"
     counts_csv = args.counts_csv or settings.output_dir / f"{source.stem}_counts.csv"
     if output.expanduser().resolve() == source:
@@ -224,6 +233,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         history_size=settings.tracker_history_size,
         frame_rate=output_fps,
         frame_size=(width, height),
+        reid_model=reid_model if args.enable_reid else None,
+        reid_providers=settings.onnx_providers,
     )
     reporter = LiveReporter(
         args.live_dir,
@@ -417,6 +428,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     camera_id=camera_counting.camera_id,
                     timestamp=timestamp,
                     frame_index=frames,
+                    frame=frame,
                 )
                 lost_tracks += len(tracked.expired_track_ids)
                 speed_result = (
@@ -752,6 +764,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "processing_fps": 1000.0 / (total_ms / frames),
                 "maximum_confirmed_humans": maximum_confirmed,
                 "total_unique_people": snapshot.total_unique_people,
+                "reid_enabled": tracker.reid_enabled,
                 "maximum_total_zone_occupancy": maximum_occupancy,
                 "line_crossed_events": events,
                 "restricted_area_enabled": restricted is not None,

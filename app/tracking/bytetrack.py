@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 import math
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 import warnings
@@ -17,6 +18,7 @@ with warnings.catch_warnings():
 
 from app.core.models import Detection, TrackObservation, TrajectoryPoint
 from app.tracking.base import TrackingResult
+from app.tracking.reid import OsNetReIdentifier, ReIdGallery
 
 
 def foot_point(xyxy: Sequence[float]) -> tuple[float, float]:
@@ -58,6 +60,11 @@ class ByteTrackAdapter:
         confirmation_frames: int = 2,
         smoothing_alpha: float = 0.35,
         frame_size: tuple[int, int] | None = None,
+        reid_model: str | Path | None = None,
+        reid_providers: Sequence[str] = ("CPUExecutionProvider",),
+        reid_similarity_threshold: float = 0.75,
+        reid_max_age_frames: int = 300,
+        reid_interval: int = 5,
     ) -> None:
         _unit_interval(activation_threshold, "activation_threshold")
         _unit_interval(match_threshold, "match_threshold")
@@ -72,10 +79,26 @@ class ByteTrackAdapter:
             raise ValueError("frame_rate must be finite and positive")
         if frame_size is not None and (frame_size[0] <= 0 or frame_size[1] <= 0):
             raise ValueError("frame_size must contain positive width and height")
+        if reid_interval <= 0:
+            raise ValueError("reid_interval must be positive")
 
         self.history_size = history_size
         self.smoothing_alpha = smoothing_alpha
         self.frame_size = frame_size
+        self.reid_interval = reid_interval
+        self._reidentifier = (
+            OsNetReIdentifier(reid_model, providers=reid_providers)
+            if reid_model is not None
+            else None
+        )
+        self._reid_gallery = (
+            ReIdGallery(
+                similarity_threshold=reid_similarity_threshold,
+                max_age_frames=reid_max_age_frames,
+            )
+            if self._reidentifier is not None
+            else None
+        )
         # Trackers 2.5 emits deprecation-library warnings during construction;
         # they are external packaging warnings, not tracker behavior warnings.
         with warnings.catch_warnings():
@@ -97,6 +120,7 @@ class ByteTrackAdapter:
                 ) from exc
         self._histories: dict[int, deque[TrajectoryPoint]] = {}
         self._tracklet_ids: dict[int, int] = {}
+        self._confirmed_track_ids: set[int] = set()
         self._next_track_id = 1
         self._last_frame_index: int | None = None
 
@@ -107,11 +131,14 @@ class ByteTrackAdapter:
         camera_id: str,
         timestamp: float,
         frame_index: int,
+        frame: np.ndarray | None = None,
     ) -> TrackingResult:
         """Advance ByteTrack and retain only observations seen in this frame."""
 
         self._validate_frame(camera_id, timestamp, frame_index)
         self._validate_detections(detections, frame_index)
+        if self._reidentifier is not None and frame is None:
+            raise ValueError("frame is required when OSNet ReID is enabled")
         started = perf_counter()
         tracker_input = detections_to_supervision(detections)
         try:
@@ -130,13 +157,62 @@ class ByteTrackAdapter:
         ]
         row_matches = _match_rows_to_tracklets(tracked, active_tracklets)
         observations: list[TrackObservation] = []
+        alive_identities = {id(tracklet) for tracklet in self._tracker.tracks}
+        occupied_track_ids = {
+            track_id
+            for identity, track_id in self._tracklet_ids.items()
+            if identity in alive_identities
+        }
         for row_index, tracklet in row_matches:
             identity = id(tracklet)
             track_id = self._tracklet_ids.get(identity)
+            is_confirmed = tracklet.tracker_id != -1
+            embedding = None
+            should_embed = self._reidentifier is not None and (
+                track_id is None
+                or (is_confirmed and track_id not in self._confirmed_track_ids)
+                or frame_index % self.reid_interval == 0
+            )
+            if should_embed:
+                assert frame is not None
+                embedding = self._reidentifier.embed(frame, tracklet.get_state_bbox())
             if track_id is None:
-                track_id = self._next_track_id
-                self._next_track_id += 1
+                track_id = (
+                    self._reid_gallery.match(
+                        embedding,
+                        frame_index,
+                        excluded_track_ids=occupied_track_ids,
+                    )
+                    if embedding is not None and self._reid_gallery is not None
+                    else None
+                )
+                if track_id is None:
+                    track_id = self._next_track_id
+                    self._next_track_id += 1
                 self._tracklet_ids[identity] = track_id
+            elif (
+                is_confirmed
+                and track_id not in self._confirmed_track_ids
+                and embedding is not None
+                and self._reid_gallery is not None
+            ):
+                matched_id = self._reid_gallery.match(
+                    embedding,
+                    frame_index,
+                    excluded_track_ids=occupied_track_ids,
+                )
+                if matched_id is not None and matched_id != track_id:
+                    provisional_id = track_id
+                    track_id = matched_id
+                    self._tracklet_ids[identity] = track_id
+                    occupied_track_ids.discard(provisional_id)
+                    provisional_history = self._histories.pop(provisional_id, None)
+                    if provisional_history is not None:
+                        self._histories[track_id] = provisional_history
+            occupied_track_ids.add(track_id)
+            if is_confirmed and embedding is not None and self._reid_gallery is not None:
+                self._reid_gallery.update(track_id, embedding, frame_index)
+                self._confirmed_track_ids.add(track_id)
 
             box = tuple(float(value) for value in tracklet.get_state_bbox())
             raw_point = foot_point(box)
@@ -171,18 +247,23 @@ class ByteTrackAdapter:
                 )
             )
 
-        alive_identities = {id(tracklet) for tracklet in self._tracker.tracks}
+        alive_public_ids = {
+            track_id
+            for identity, track_id in self._tracklet_ids.items()
+            if identity in alive_identities
+        }
         expired = tuple(
             sorted(
                 track_id
                 for identity, track_id in self._tracklet_ids.items()
-                if identity not in alive_identities
+                if identity not in alive_identities and track_id not in alive_public_ids
             )
         )
         for identity, track_id in tuple(self._tracklet_ids.items()):
             if identity not in alive_identities:
                 del self._tracklet_ids[identity]
-                self._histories.pop(track_id, None)
+                if track_id not in alive_public_ids:
+                    self._histories.pop(track_id, None)
 
         self._last_frame_index = frame_index
         return TrackingResult(
@@ -197,8 +278,15 @@ class ByteTrackAdapter:
         self._tracker.reset()
         self._histories.clear()
         self._tracklet_ids.clear()
+        self._confirmed_track_ids.clear()
         self._next_track_id = 1
         self._last_frame_index = None
+        if self._reid_gallery is not None:
+            self._reid_gallery.clear()
+
+    @property
+    def reid_enabled(self) -> bool:
+        return self._reidentifier is not None
 
     @property
     def retained_track_count(self) -> int:

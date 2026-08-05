@@ -11,6 +11,7 @@ onnx:
   providers:
     - CPUExecutionProvider
   detector_model: ../../All_weights/Weights_final/HumanDetection_light_input_640.onnx
+  reid_model: All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx
 
 detector:
   confidence_threshold: 0.40

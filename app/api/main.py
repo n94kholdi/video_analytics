@@ -129,6 +129,7 @@ async def create_job(
     application_id: Annotated[str, Form(...)],
     camera_id: Annotated[str, Form()] = "uploaded-video",
     max_frames: Annotated[int | None, Form()] = None,
+    enable_reid: Annotated[bool, Form()] = False,
     camera_config: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, object]:
     try:
@@ -137,6 +138,8 @@ async def create_job(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if max_frames is not None and max_frames <= 0:
         raise HTTPException(status_code=422, detail="max_frames must be positive")
+    if enable_reid and preset.module == "app.detection.cli":
+        raise HTTPException(status_code=422, detail="ReID is only available for tracking jobs")
     camera_id = camera_id.strip()
     if not camera_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", camera_id):
         raise HTTPException(
@@ -177,6 +180,7 @@ async def create_job(
             input_video=video_path,
             camera_config=config_path,
             max_frames=max_frames,
+            enable_reid=enable_reid,
         )
     except Exception:
         shutil.rmtree(job_directory, ignore_errors=True)

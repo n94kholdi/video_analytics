@@ -28,6 +28,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("source", type=Path, help="input recorded video")
     parser.add_argument("--config", type=Path, help="application YAML configuration")
     parser.add_argument("--model", type=Path, help="override detector model path")
+    parser.add_argument(
+        "--enable-reid",
+        action="store_true",
+        help="enable higher-cost OSNet appearance re-identification",
+    )
+    parser.add_argument("--reid-model", type=Path, help="override OSNet ReID model path")
     parser.add_argument("--output", type=Path, help="annotated MP4 path")
     parser.add_argument("--camera-id", default="camera-1")
     parser.add_argument("--max-frames", type=int)
@@ -73,6 +79,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     model = args.model or settings.detector_model
     if model is None:
         raise ConfigError("a detector model is required via config or --model")
+    reid_model = args.reid_model or settings.reid_model
+    if args.enable_reid and reid_model is None:
+        raise ConfigError("--enable-reid requires a ReID model via config or --reid-model")
     output = args.output or settings.output_dir / f"{source.stem}_tracked.mp4"
 
     detector = OnnxPersonDetector(
@@ -101,6 +110,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         history_size=settings.tracker_history_size,
         frame_rate=output_fps,
         frame_size=(width, height),
+        reid_model=reid_model if args.enable_reid else None,
+        reid_providers=settings.onnx_providers,
     )
     reporter = LiveReporter(
         args.live_dir,
@@ -148,6 +159,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 camera_id=args.camera_id,
                 timestamp=timestamp,
                 frame_index=frames,
+                frame=frame,
             )
             current_track_ids = {
                 item.track_id for item in tracked.observations if item.confirmed
@@ -215,6 +227,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "processing_fps": 1000.0 / (total_ms / frames),
                 "track_observations": observations,
                 "total_unique_people": len(unique_track_ids),
+                "reid_enabled": tracker.reid_enabled,
                 "average_timings_ms": {
                     "detection": detection_ms / frames,
                     "tracking": tracking_ms / frames,
