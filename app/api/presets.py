@@ -68,7 +68,13 @@ QUEUE_METRICS = COUNTING_METRICS + (
     MetricDefinition("queue_speed", "Queue movement speed", unit="px/s", aggregation="average", display="chart"),
     MetricDefinition("average_person_speed", "Average person speed", unit="px/s", aggregation="average", display="chart"),
 )
-HEATMAP_METRICS = COUNTING_METRICS
+CROWDED_REGION_METRIC = MetricDefinition(
+    "top_crowded_regions",
+    "Top crowded regions",
+    value_type="table",
+    display="table",
+)
+HEATMAP_METRICS = COUNTING_METRICS + (CROWDED_REGION_METRIC,)
 
 
 APPLICATIONS = (
@@ -140,7 +146,14 @@ APPLICATIONS = (
             "configured",
         ),
         True,
-        RESTRICTED_METRICS + tuple(metric for metric in QUEUE_METRICS if metric.key.startswith("queue_") or metric.key == "average_person_speed"),
+        RESTRICTED_METRICS
+        + tuple(
+            metric
+            for metric in QUEUE_METRICS
+            if metric.key.startswith("queue_")
+            or metric.key == "average_person_speed"
+        )
+        + (CROWDED_REGION_METRIC,),
     ),
 )
 

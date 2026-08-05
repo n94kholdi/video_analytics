@@ -129,12 +129,16 @@ tumbling windows; setting it to `null` retains run totals until explicit reset.
 Calibration creates a parallel ground-plane grid, using configured
 `ground_bounds` or the calibration correspondence extents. Missing calibration
 leaves image heatmaps available and reports a clear ground-unavailable reason.
-Rendering covers the complete configured heatmap region: zero-value cells use
+Image heatmaps always evaluate the complete frame: zero-value cells use
 the low (blue) end of the selected color map and increasingly occupied cells
 progress through green/yellow/orange to red. `smoothing_sigma_cells` spreads
 each foot-point cell into a readable density region without changing the exact
-numeric CSV values. Set the heatmap `region` to the normalized full-frame
-rectangle `[[0, 0], [1, 0], [1, 1], [0, 1]]` to color the entire image.
+numeric CSV values. Each image snapshot is also divided into 12 row-major
+regions (3 rows by 4 columns). The three regions with the highest average
+occupancy are returned as `top_crowded_regions`, including their row, column,
+normalized frame bounds, and average occupancy. Heatmap videos and live previews
+draw all 12 region boundaries and highlight the top three with matching rank and
+region labels for direct comparison with the dashboard report.
 
 Queue analytics are separated into:
 

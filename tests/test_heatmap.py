@@ -11,8 +11,10 @@ from app.analytics.heatmap import (
     HeatmapGrid,
     HeatmapVideoWriter,
     MovementHeatmaps,
+    annotate_crowded_regions,
     colorize_heatmap,
     export_heatmap_snapshot,
+    rank_crowded_regions,
 )
 from app.core.models import TrackObservation
 from app.analytics.cli import build_parser
@@ -163,6 +165,62 @@ def test_ground_plane_grid_uses_synthetic_calibration() -> None:
     assert snapshot.ground.unit == "metres"
     assert snapshot.ground.occupancy[1, 1] == 2
     assert snapshot.ground.dwell_seconds[1, 1] == pytest.approx(1.25)
+
+
+def test_image_heatmap_always_evaluates_the_whole_frame() -> None:
+    mapping = camera_mapping(calibrated=False)
+    mapping["heatmap"]["region"] = [[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]]
+    heatmaps = MovementHeatmaps.from_camera_config(
+        CameraConfig.from_mapping(mapping), (101, 101)
+    )
+
+    snapshot = heatmaps.update(
+        [observation(1, 0.0, (0.0, 0.0)), observation(2, 0.0, (100.0, 100.0))]
+    )
+
+    assert snapshot.image.occupancy.sum() == 2
+    assert snapshot.image.occupancy[0, 0] == 1
+    assert snapshot.image.occupancy[-1, -1] == 1
+
+
+def test_top_three_crowded_regions_use_average_occupancy_across_3_by_4_grid() -> None:
+    occupancy = np.zeros((6, 8), dtype=np.uint64)
+    occupancy[0:2, 0:2] = 2  # Region 1 average = 2.
+    occupancy[2:4, 2:4] = 5  # Region 6 average = 5.
+    occupancy[4:6, 6:8] = 3  # Region 12 average = 3.
+
+    regions = rank_crowded_regions(occupancy)
+
+    assert [(item.region_id, item.row, item.column) for item in regions] == [
+        (6, 2, 2),
+        (12, 3, 4),
+        (1, 1, 1),
+    ]
+    assert [item.average_occupancy for item in regions] == pytest.approx([5, 3, 2])
+    assert regions[0].normalized_bounds == pytest.approx((0.25, 1 / 3, 0.5, 2 / 3))
+
+
+def test_crowded_regions_support_heatmaps_smaller_than_the_region_layout() -> None:
+    regions = rank_crowded_regions(np.asarray([[0, 1], [2, 3]], dtype=np.uint64))
+
+    assert len(regions) == 3
+    assert regions[0].region_id == 11  # Equal-score ties use row-major order.
+
+
+def test_crowded_region_annotation_draws_grid_and_highlights_top_three() -> None:
+    frame = np.zeros((120, 160, 3), dtype=np.uint8)
+    occupancy = np.zeros((6, 8), dtype=np.uint64)
+    occupancy[0:2, 0:2] = 3
+    occupancy[2:4, 2:4] = 2
+    occupancy[4:6, 6:8] = 1
+
+    annotated = annotate_crowded_regions(
+        frame, rank_crowded_regions(occupancy)
+    )
+
+    assert not np.any(frame)  # The default keeps the caller's frame unchanged.
+    assert np.any(annotated[:, 40])  # Vertical quarter-frame grid line.
+    assert annotated[35, 35, 2] > annotated[35, 35, 0]  # Top region has red tint.
 
 
 def test_exports_have_deterministic_dimensions(tmp_path: Path) -> None:

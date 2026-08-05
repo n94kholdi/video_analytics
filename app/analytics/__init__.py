@@ -20,6 +20,7 @@ from app.analytics.restricted_area import (
 )
 from app.analytics.restricted_visualization import annotate_restricted_areas
 from app.analytics.heatmap import (
+    CrowdedRegion,
     HeatmapAccumulator,
     HeatmapExportPaths,
     HeatmapGrid,
@@ -28,10 +29,12 @@ from app.analytics.heatmap import (
     HeatmapVideoWriter,
     MovementHeatmaps,
     MovementHeatmapSnapshot,
+    annotate_crowded_regions,
     colorize_heatmap,
     export_heatmap_snapshot,
     export_numeric_grid,
     overlay_heatmap,
+    rank_crowded_regions,
 )
 from app.analytics.queue import (
     CameraQueueConfig,
@@ -73,6 +76,7 @@ __all__ = [
     "CalibrationDistanceCheck",
     "CountingResult",
     "CountingSnapshot",
+    "CrowdedRegion",
     "HeatmapAccumulator",
     "HeatmapExportPaths",
     "HeatmapGrid",
@@ -105,6 +109,7 @@ __all__ = [
     "VerticalQueueRow",
     "VerticalQueueSnapshot",
     "annotate_people_counts",
+    "annotate_crowded_regions",
     "annotate_queues",
     "annotate_restricted_areas",
     "annotate_vertical_queues",
@@ -114,6 +119,7 @@ __all__ = [
     "hotter_row_color",
     "overlay_heatmap",
     "queue_progress_speed",
+    "rank_crowded_regions",
     "validate_known_ground_distance",
     "vertical_row_color",
 ]

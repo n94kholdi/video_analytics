@@ -20,9 +20,11 @@ from app.api.live import (
 )
 from app.analytics.counting import CameraCountingConfig, PeopleCounter
 from app.analytics.heatmap import (
+    CrowdedRegion,
     HeatmapExportPaths,
     HeatmapVideoWriter,
     MovementHeatmaps,
+    annotate_crowded_regions,
     colorize_heatmap,
     export_heatmap_snapshot,
     overlay_heatmap,
@@ -691,6 +693,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "frame_count": frames,
                     "progress": min(100.0, frames * 100.0 / reporter.total_frames) if reporter.total_frames else None,
                     "elapsed_seconds": reporter.elapsed,
+                    "top_crowded_regions": (
+                        _crowded_regions(heatmap_snapshot.top_crowded_regions)
+                        if heatmaps is not None
+                        else None
+                    ),
                 }
                 preview_frame = final_frame
                 if heatmaps is not None:
@@ -705,6 +712,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                             ),
                         ),
                         opacity=(heatmap_settings.opacity if heatmap_settings else 0.55),
+                    )
+                    annotate_crowded_regions(
+                        preview_frame,
+                        heatmap_snapshot.top_crowded_regions,
+                        copy=False,
                     )
                 reporter.publish(frames - 1, live_metrics, frame=preview_frame)
     finally:
@@ -725,9 +737,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         smoothing_sigma = (
             heatmap_settings.smoothing_sigma_cells if heatmap_settings else 1.0
         )
-        snapshot = heatmaps.snapshot()
+        movement_snapshot = heatmaps.snapshot()
         image_exports = export_heatmap_snapshot(
-            snapshot.image,
+            movement_snapshot.image,
             heatmap_directory,
             prefix=f"{heatmaps.camera_id}_image",
             color_map=color_map,
@@ -743,11 +755,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "dwell": str(heatmap_video_writer.paths.dwell.resolve()),
             },
             "ground": None,
-            "ground_unavailable_reason": snapshot.ground_unavailable_reason,
+            "ground_unavailable_reason": movement_snapshot.ground_unavailable_reason,
+            "top_crowded_regions": _crowded_regions(
+                movement_snapshot.top_crowded_regions
+            ),
         }
-        if snapshot.ground is not None:
+        if movement_snapshot.ground is not None:
             ground_exports = export_heatmap_snapshot(
-                snapshot.ground,
+                movement_snapshot.ground,
                 heatmap_directory,
                 prefix=f"{heatmaps.camera_id}_ground",
                 color_map=color_map,
@@ -850,6 +865,21 @@ def _export_paths(paths: HeatmapExportPaths) -> dict[str, str | None]:
             ("dwell_overlay", paths.dwell_overlay),
         )
     }
+
+
+def _crowded_regions(regions: Sequence[CrowdedRegion]) -> list[dict[str, object]]:
+    """Convert ranked crowd regions to the CLI/API JSON representation."""
+
+    return [
+        {
+            "region_id": region.region_id,
+            "row": region.row,
+            "column": region.column,
+            "normalized_bounds": list(region.normalized_bounds),
+            "average_occupancy": region.average_occupancy,
+        }
+        for region in regions
+    ]
 
 
 if __name__ == "__main__":

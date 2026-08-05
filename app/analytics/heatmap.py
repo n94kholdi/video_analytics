@@ -89,12 +89,29 @@ class HeatmapSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class CrowdedRegion:
+    """One region in a row-major whole-frame crowd-density ranking."""
+
+    region_id: int
+    row: int
+    column: int
+    normalized_bounds: tuple[float, float, float, float]
+    average_occupancy: float
+
+
+@dataclass(frozen=True, slots=True)
 class MovementHeatmapSnapshot:
     """Image heatmaps and an optional calibrated ground-plane counterpart."""
 
     image: HeatmapSnapshot
     ground: HeatmapSnapshot | None
     ground_unavailable_reason: str | None = None
+
+    @property
+    def top_crowded_regions(self) -> tuple[CrowdedRegion, ...]:
+        """Return the three busiest regions in a 3-row by 4-column frame grid."""
+
+        return rank_crowded_regions(self.image.occupancy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,16 +313,10 @@ class MovementHeatmaps:
         if width < 2 or height < 2:
             raise ValueError("heatmap frame width and height must be at least two")
         configured = settings or HeatmapConfig()
-        region = (
-            tuple(point.to_pixels(frame_size) for point in configured.region)
-            if configured.region is not None
-            else None
-        )
         image = HeatmapAccumulator(
             HeatmapGrid(
                 configured.grid_size,
                 (0.0, 0.0, float(width - 1), float(height - 1)),
-                region,
             ),
             **_accumulator_options(configured),
         )
@@ -325,16 +336,10 @@ class MovementHeatmaps:
         if width < 2 or height < 2:
             raise ValueError("heatmap frame width and height must be at least two")
         settings = config.heatmap
-        image_region = (
-            tuple(point.to_pixels(frame_size) for point in settings.region)
-            if settings.region is not None
-            else None
-        )
         image = HeatmapAccumulator(
             HeatmapGrid(
                 settings.grid_size,
                 (0.0, 0.0, float(width - 1), float(height - 1)),
-                image_region,
             ),
             **_accumulator_options(settings),
         )
@@ -394,6 +399,53 @@ class MovementHeatmaps:
         assert self.projector is not None
         projected = self.projector.project(observation.foot_point)
         return projected.point if projected.available else None
+
+
+def rank_crowded_regions(
+    occupancy: np.ndarray,
+    *,
+    rows: int = 3,
+    columns: int = 4,
+    top_k: int = 3,
+) -> tuple[CrowdedRegion, ...]:
+    """Rank whole-frame regions by their mean occupancy heatmap value.
+
+    Area interpolation makes each score cover an exact equal-sized part of the
+    frame, including when the heatmap grid is smaller than or not divisible by
+    the requested layout. Ties resolve in row-major order (top-left first).
+    """
+
+    if occupancy.ndim != 2 or occupancy.size == 0:
+        raise ValueError("crowded-region ranking requires a non-empty 2-D grid")
+    if any(isinstance(value, bool) or value <= 0 for value in (rows, columns, top_k)):
+        raise ValueError("crowded-region rows, columns, and top_k must be positive")
+    finite = np.nan_to_num(
+        occupancy.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0
+    )
+    regional_averages = cv2.resize(
+        np.maximum(finite, 0.0),
+        (columns, rows),
+        interpolation=cv2.INTER_AREA,
+    )
+    regions: list[CrowdedRegion] = []
+    for row in range(rows):
+        for column in range(columns):
+            regions.append(
+                CrowdedRegion(
+                    region_id=row * columns + column + 1,
+                    row=row + 1,
+                    column=column + 1,
+                    normalized_bounds=(
+                        column / columns,
+                        row / rows,
+                        (column + 1) / columns,
+                        (row + 1) / rows,
+                    ),
+                    average_occupancy=float(regional_averages[row, column]),
+                )
+            )
+    regions.sort(key=lambda region: (-region.average_occupancy, region.region_id))
+    return tuple(regions[: min(top_k, len(regions))])
 
 
 class HeatmapVideoWriter:
@@ -481,6 +533,9 @@ class HeatmapVideoWriter:
             center = (int(round(point[0])), int(round(point[1])))
             cv2.circle(occupancy_overlay, center, 7, (255, 255, 255), 2, cv2.LINE_AA)
             cv2.circle(dwell_overlay, center, 7, (255, 255, 255), 2, cv2.LINE_AA)
+        crowded_regions = rank_crowded_regions(snapshot.occupancy)
+        annotate_crowded_regions(occupancy_overlay, crowded_regions, copy=False)
+        annotate_crowded_regions(dwell_overlay, crowded_regions, copy=False)
         self._occupancy.write(occupancy_overlay)
         self._dwell.write(dwell_overlay)
 
@@ -489,6 +544,55 @@ class HeatmapVideoWriter:
 
         self._occupancy.release()
         self._dwell.release()
+
+
+def annotate_crowded_regions(
+    frame: np.ndarray,
+    regions: Sequence[CrowdedRegion],
+    *,
+    rows: int = 3,
+    columns: int = 4,
+    copy: bool = True,
+) -> np.ndarray:
+    """Draw the 12-region frame grid and visibly mark ranked crowd regions."""
+
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError("crowded-region annotation requires a BGR image")
+    if rows <= 0 or columns <= 0:
+        raise ValueError("crowded-region rows and columns must be positive")
+    output = frame.copy() if copy else frame
+    height, width = output.shape[:2]
+    ranked = {region.region_id: rank for rank, region in enumerate(regions, 1)}
+    colors = ((0, 0, 255), (0, 140, 255), (0, 230, 255))
+
+    # A translucent fill remains visible over both bright and dark heatmap colors.
+    tint = output.copy()
+    for region in regions:
+        rank = ranked[region.region_id]
+        x0 = round((region.column - 1) * width / columns)
+        y0 = round((region.row - 1) * height / rows)
+        x1 = round(region.column * width / columns) - 1
+        y1 = round(region.row * height / rows) - 1
+        cv2.rectangle(tint, (x0, y0), (x1, y1), colors[min(rank, 3) - 1], -1)
+    cv2.addWeighted(tint, 0.24, output, 0.76, 0.0, dst=output)
+
+    font_scale = max(0.42, min(width, height) / 900.0)
+    for row in range(rows):
+        for column in range(columns):
+            region_id = row * columns + column + 1
+            x0 = round(column * width / columns)
+            y0 = round(row * height / rows)
+            x1 = round((column + 1) * width / columns) - 1
+            y1 = round((row + 1) * height / rows) - 1
+            rank = ranked.get(region_id)
+            color = colors[min(rank, 3) - 1] if rank is not None else (255, 255, 255)
+            thickness = 4 if rank is not None else 1
+            cv2.rectangle(output, (x0, y0), (x1, y1), color, thickness, cv2.LINE_AA)
+            label = f"TOP {rank} | R{region_id}" if rank is not None else f"R{region_id}"
+            origin = (x0 + 7, min(y1 - 5, y0 + 22))
+            cv2.putText(output, label, origin, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 4, cv2.LINE_AA)
+            cv2.putText(output, label, origin, cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 1, cv2.LINE_AA)
+    return output
 
 
 def export_numeric_grid(grid: np.ndarray, path: str | Path) -> Path:

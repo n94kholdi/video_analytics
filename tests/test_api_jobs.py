@@ -29,6 +29,16 @@ def test_configured_applications_declare_camera_config_requirement() -> None:
     assert not get_application("people_counting").requires_camera_config
 
 
+def test_heatmap_applications_expose_top_crowded_regions_metric() -> None:
+    for application_id in ("heatmap", "full_analytics"):
+        metrics = get_application(application_id).metrics
+        definition = next(
+            item for item in metrics if item.key == "top_crowded_regions"
+        )
+        assert definition.value_type == "table"
+        assert definition.display == "table"
+
+
 def test_job_command_uses_existing_analytics_cli(tmp_path: Path) -> None:
     manager = JobManager(tmp_path, python_executable="python-test")
     job_dir = tmp_path / "job-1"
