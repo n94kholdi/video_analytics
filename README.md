@@ -272,6 +272,31 @@ VIDEO_ANALYTICS_CORS_ORIGINS=http://localhost:3000
 VIDEO_ANALYTICS_DETECTOR_MODEL=/absolute/path/to/model.onnx
 ```
 
+### Run with Docker
+
+The Docker image includes the CPU runtime, FFmpeg, and the detector/ReID model
+files used by the API. Build and start it from this directory:
+
+```bash
+docker-compose up --build -d
+```
+
+Port `8000` is used by default. If it is already occupied, choose another host
+port, for example `VIDEO_ANALYTICS_PORT=8001 docker-compose up --build -d`.
+
+Check the service and open its API documentation:
+
+```bash
+curl http://localhost:8000/health
+docker-compose logs -f api
+```
+
+The API is available at `http://localhost:8000`, and Swagger UI is at
+`http://localhost:8000/docs`. Job uploads and generated artifacts persist in
+the `analytics-jobs` Docker volume across container restarts. Stop the service
+with `docker-compose down`; add `--volumes` only when you also intend to delete
+all persisted jobs.
+
 Load the default settings:
 
 ```bash
