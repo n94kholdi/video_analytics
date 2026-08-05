@@ -29,6 +29,19 @@ def test_configured_applications_declare_camera_config_requirement() -> None:
     assert not get_application("people_counting").requires_camera_config
 
 
+def test_restricted_area_exposes_lifecycle_counters() -> None:
+    keys = {item.key for item in get_application("restricted_area").metrics}
+
+    assert {
+        "restricted_occupancy",
+        "restricted_entries",
+        "restricted_exits",
+        "restricted_violations",
+    } <= keys
+    assert "entry_count" not in keys
+    assert "exit_count" not in keys
+
+
 def test_heatmap_applications_expose_top_crowded_regions_metric() -> None:
     for application_id in ("heatmap", "full_analytics"):
         metrics = get_application(application_id).metrics

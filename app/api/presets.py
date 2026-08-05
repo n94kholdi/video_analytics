@@ -58,9 +58,11 @@ COUNTING_METRICS = TRACKING_METRICS + (
     MetricDefinition("exit_count", "Exits", aggregation="total", display="counter"),
     MetricDefinition("zone_occupancy", "Area occupancy", value_type="table", display="table"),
 )
-RESTRICTED_METRICS = COUNTING_METRICS + (
-    MetricDefinition("restricted_occupancy", "Restricted occupancy", display="status"),
-    MetricDefinition("restricted_violations", "Restricted violations", aggregation="total", display="counter"),
+RESTRICTED_METRICS = (
+    MetricDefinition("restricted_occupancy", "Currently inside restricted area", display="status"),
+    MetricDefinition("restricted_entries", "Restricted-area entries", aggregation="total", display="counter"),
+    MetricDefinition("restricted_exits", "Restricted-area exits", aggregation="total", display="counter"),
+    MetricDefinition("restricted_violations", "Confirmed restricted-area alerts", aggregation="total", display="counter"),
 )
 QUEUE_METRICS = COUNTING_METRICS + (
     MetricDefinition("queue_length", "Detected people queue", unit="people", display="chart"),
@@ -106,7 +108,7 @@ APPLICATIONS = (
         "app.analytics.cli",
         ("--enable-restricted-area",),
         True,
-        RESTRICTED_METRICS,
+        TRACKING_METRICS + RESTRICTED_METRICS,
     ),
     ApplicationPreset(
         "heatmap",
@@ -146,7 +148,8 @@ APPLICATIONS = (
             "configured",
         ),
         True,
-        RESTRICTED_METRICS
+        COUNTING_METRICS
+        + RESTRICTED_METRICS
         + tuple(
             metric
             for metric in QUEUE_METRICS

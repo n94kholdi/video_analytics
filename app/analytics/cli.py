@@ -339,6 +339,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     frames = 0
     events = 0
     restricted_events = 0
+    restricted_alerts = 0
     queue_events = 0
     maximum_confirmed = 0
     maximum_occupancy = 0
@@ -639,12 +640,24 @@ def main(argv: Sequence[str] | None = None) -> None:
                 events += len(counted.events)
                 if intrusion is not None:
                     restricted_events += len(intrusion.events)
+                    restricted_alerts += sum(
+                        event.event_type == "restricted_area_confirmed"
+                        for event in intrusion.events
+                    )
                 if queue_result is not None:
                     queue_events += len(queue_result.events)
                 frames += 1
                 total_ms += (perf_counter() - started) * 1000.0
                 restricted_occupancy = (
-                    sum(zone.current_tracks for zone in intrusion.snapshot.zones)
+                    intrusion.snapshot.current_tracks
+                    if intrusion is not None else None
+                )
+                restricted_entries = (
+                    intrusion.snapshot.cumulative_entries
+                    if intrusion is not None else None
+                )
+                restricted_exits = (
+                    intrusion.snapshot.cumulative_exits
                     if intrusion is not None else None
                 )
                 queue_statuses = (
@@ -681,7 +694,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                         item.zone_id: item.current for item in snapshot.occupancy
                     },
                     "restricted_occupancy": restricted_occupancy,
-                    "restricted_violations": restricted_events,
+                    "restricted_entries": restricted_entries,
+                    "restricted_exits": restricted_exits,
+                    "restricted_violations": restricted_alerts,
                     "queue_length": sum(queue_lengths) if queue_lengths else None,
                     "queue_wait_seconds": sum(queue_waits) / len(queue_waits) if queue_waits else None,
                     "queue_speed": sum(queue_speeds) / len(queue_speeds) if queue_speeds else None,

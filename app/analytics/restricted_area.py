@@ -83,6 +83,21 @@ class RestrictedAreaSnapshot:
     zones: tuple[RestrictedZoneStatus, ...]
     tracks: tuple[IntrusionTrackStatus, ...]
 
+    @property
+    def current_tracks(self) -> int:
+        """People currently considered inside across all configured zones."""
+        return sum(zone.current_tracks for zone in self.zones)
+
+    @property
+    def cumulative_entries(self) -> int:
+        """Completed inside transitions across all configured zones."""
+        return sum(zone.cumulative_entries for zone in self.zones)
+
+    @property
+    def cumulative_exits(self) -> int:
+        """Completed exits after each zone's grace period."""
+        return sum(zone.cumulative_exits for zone in self.zones)
+
     def zone_for(self, zone_id: str) -> RestrictedZoneStatus:
         return next(item for item in self.zones if item.zone_id == zone_id)
 

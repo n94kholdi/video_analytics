@@ -181,6 +181,30 @@ def test_multiple_tracks_and_overlapping_named_zones_are_independent() -> None:
     assert result.snapshot.zone_for("left").current_tracks == 1
     assert result.snapshot.zone_for("right").cumulative_entries == 2
     assert result.snapshot.state_for("left", 2) is IntrusionState.OUTSIDE
+    assert result.snapshot.current_tracks == 3
+    assert result.snapshot.cumulative_entries == 3
+    assert result.snapshot.cumulative_exits == 0
+
+
+def test_snapshot_aggregates_current_entries_and_completed_exits() -> None:
+    detector = _detector(_zone("secure", dwell=0, grace=0))
+    entered = detector.update(
+        "cam-a",
+        [_observation(1, (50, 50), 0), _observation(2, (50, 50), 0)],
+        timestamp=0,
+    )
+    exited = detector.update(
+        "cam-a",
+        [_observation(1, (10, 50), 1), _observation(2, (50, 50), 1)],
+        timestamp=1,
+    )
+
+    assert entered.snapshot.current_tracks == 2
+    assert entered.snapshot.cumulative_entries == 2
+    assert entered.snapshot.cumulative_exits == 0
+    assert exited.snapshot.current_tracks == 1
+    assert exited.snapshot.cumulative_entries == 2
+    assert exited.snapshot.cumulative_exits == 1
 
 
 def test_unconfirmed_tracks_are_ignored_and_reset_clears_all_state() -> None:
