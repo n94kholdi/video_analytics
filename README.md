@@ -262,6 +262,13 @@ vertical-queue, configured-queue, and combined-analysis presets. Applications
 that depend on configured polygons require a camera YAML upload; the other
 presets can run using only a recorded video.
 
+Live RTSP sources use the same processing commands through
+`POST /api/v1/stream-jobs`. The JSON body accepts `stream_url`,
+`application_id`, `camera_id`, optional `max_frames`, and optional
+`enable_reid`. The Tarebar camera backend calls this endpoint when live
+analysis is started from a monitoring card. Presets that require camera YAML
+remain recorded-job-only for now.
+
 Useful environment settings:
 
 ```text

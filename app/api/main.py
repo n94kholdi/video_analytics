@@ -14,6 +14,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
@@ -48,6 +49,37 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+class StreamJobRequest(BaseModel):
+    """Start the existing pipeline with a normalized RTSP camera source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stream_url: str = Field(min_length=1, max_length=2048)
+    application_id: str
+    camera_id: str = "live-camera"
+    max_frames: int | None = Field(default=None, gt=0)
+    enable_reid: bool = False
+
+    @field_validator("stream_url")
+    @classmethod
+    def validate_stream_url(cls, value: str) -> str:
+        candidate = value.strip()
+        if not re.match(r"^rtsps?://[^/]+/.+", candidate, flags=re.IGNORECASE):
+            raise ValueError("stream_url must be an RTSP URL with a stream path")
+        return candidate
+
+    @field_validator("camera_id")
+    @classmethod
+    def validate_camera_id(cls, value: str) -> str:
+        candidate = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", candidate):
+            raise ValueError(
+                "camera_id must use 1-100 letters, digits, dots, underscores, or hyphens"
+            )
+        return candidate
+        return candidate
 
 
 @app.get("/health")
@@ -189,6 +221,53 @@ async def create_job(
         await video.close()
         if camera_config is not None:
             await camera_config.close()
+
+    manager.enqueue(job_id)
+    return {"data": manager.public_dict(record)}
+
+
+@app.post("/api/v1/stream-jobs", status_code=202)
+def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
+    """Run a detector/tracker/analytics preset directly against RTSP.
+
+    The transport contract is deliberately source-agnostic: Larix, an IP
+    camera, or another publisher all appear here as an RTSP URL. MediaMTX owns
+    protocol conversion and the CV pipeline remains unchanged.
+    """
+
+    try:
+        preset = get_application(request.application_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if preset.requires_camera_config:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{preset.name} requires camera geometry; use a preset without "
+                "camera YAML for live jobs"
+            ),
+        )
+    if request.enable_reid and preset.module == "app.detection.cli":
+        raise HTTPException(status_code=422, detail="ReID is only available for tracking jobs")
+
+    job_id = uuid4().hex
+    job_directory = manager.root / job_id
+    job_directory.mkdir(parents=True)
+    try:
+        record = manager.register(
+            job_id=job_id,
+            application_id=request.application_id,
+            original_filename=f"live:{request.camera_id}",
+            camera_id=request.camera_id,
+            input_video=request.stream_url,
+            camera_config=None,
+            max_frames=request.max_frames,
+            enable_reid=request.enable_reid,
+            source_type="rtsp",
+        )
+    except Exception:
+        shutil.rmtree(job_directory, ignore_errors=True)
+        raise
 
     manager.enqueue(job_id)
     return {"data": manager.public_dict(record)}

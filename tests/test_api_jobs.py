@@ -101,6 +101,30 @@ def test_detection_command_receives_supported_max_frames(tmp_path: Path) -> None
     assert "--camera-id" not in command
 
 
+def test_stream_job_passes_rtsp_url_to_existing_pipeline(tmp_path: Path) -> None:
+    manager = JobManager(tmp_path, python_executable="python-test")
+    job_dir = tmp_path / "live-job"
+    job_dir.mkdir()
+    source = "rtsp://mediamtx:8554/mobile-1"
+    record = manager.register(
+        job_id="live-job",
+        application_id="people_counting",
+        original_filename="live:phone",
+        camera_id="phone",
+        input_video=source,
+        camera_config=None,
+        max_frames=100,
+        source_type="rtsp",
+    )
+
+    command, _ = manager._build_command(record, get_application("people_counting"))
+    configuration = json.loads((job_dir / "configuration.json").read_text())
+
+    assert command[3] == source
+    assert configuration["source_type"] == "rtsp"
+    assert configuration["input_video"] == "<live-rtsp-stream>"
+
+
 def test_tracking_command_does_not_receive_analytics_camera_config(tmp_path: Path) -> None:
     manager = JobManager(tmp_path)
     job_dir = tmp_path / "job-3"

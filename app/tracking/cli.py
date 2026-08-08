@@ -18,6 +18,7 @@ from app.api.live import (
     resize_processing_frame,
 )
 from app.core.config import ConfigError, load_settings
+from app.core.video_source import resolve_video_source, video_source_stem
 from app.detection.onnx_detector import OnnxPersonDetector
 from app.tracking.bytetrack import ByteTrackAdapter
 from app.tracking.visualization import annotate_tracks
@@ -25,7 +26,7 @@ from app.tracking.visualization import annotate_tracks
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Phase 3 person tracking on a video.")
-    parser.add_argument("source", type=Path, help="input recorded video")
+    parser.add_argument("source", help="input recorded video or RTSP URL")
     parser.add_argument("--config", type=Path, help="application YAML configuration")
     parser.add_argument("--model", type=Path, help="override detector model path")
     parser.add_argument(
@@ -73,16 +74,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.frame_stride <= 0:
         raise ValueError("--frame-stride must be positive")
     settings = load_settings(args.config)
-    source = args.source.expanduser().resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"input source does not exist: {source}")
+    source = resolve_video_source(args.source)
     model = args.model or settings.detector_model
     if model is None:
         raise ConfigError("a detector model is required via config or --model")
     reid_model = args.reid_model or settings.reid_model
     if args.enable_reid and reid_model is None:
         raise ConfigError("--enable-reid requires a ReID model via config or --reid-model")
-    output = args.output or settings.output_dir / f"{source.stem}_tracked.mp4"
+    output = args.output or settings.output_dir / f"{video_source_stem(source)}_tracked.mp4"
 
     detector = OnnxPersonDetector(
         model,

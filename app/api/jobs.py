@@ -44,6 +44,7 @@ class JobRecord:
     error: str | None = None
     summary: dict[str, Any] | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
+    source_type: str = "file"
 
 
 class JobManager:
@@ -85,10 +86,11 @@ class JobManager:
         application_id: str,
         original_filename: str,
         camera_id: str,
-        input_video: Path,
+        input_video: Path | str,
         camera_config: Path | None,
         max_frames: int | None,
         enable_reid: bool = False,
+        source_type: str = "file",
     ) -> JobRecord:
         get_application(application_id)
         now = _now()
@@ -100,11 +102,16 @@ class JobManager:
             status="queued",
             created_at=now,
             updated_at=now,
-            job_directory=str(input_video.parent.resolve()),
-            input_video=str(input_video.resolve()),
+            job_directory=(
+                str(input_video.parent.resolve())
+                if isinstance(input_video, Path)
+                else str((self.root / job_id).resolve())
+            ),
+            input_video=str(input_video.resolve()) if isinstance(input_video, Path) else input_video,
             camera_config=str(camera_config.resolve()) if camera_config else None,
             max_frames=max_frames,
             enable_reid=enable_reid,
+            source_type=source_type,
         )
         with self._lock:
             self._jobs[job_id] = record
@@ -361,7 +368,12 @@ class JobManager:
             "application_id": record.application_id,
             "camera_id": record.camera_id,
             "original_filename": record.original_filename,
-            "input_video": Path(record.input_video).name,
+            "input_video": (
+                Path(record.input_video).name
+                if record.source_type == "file"
+                else "<live-rtsp-stream>"
+            ),
+            "source_type": record.source_type,
             "camera_config": Path(record.camera_config).name if record.camera_config else None,
             "max_frames": record.max_frames,
             "enable_reid": record.enable_reid,

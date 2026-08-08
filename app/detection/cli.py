@@ -16,6 +16,7 @@ from app.api.live import (
     resize_processing_frame,
 )
 from app.core.config import AppSettings, ConfigError, load_settings
+from app.core.video_source import is_network_video_source, resolve_video_source, video_source_stem
 from app.detection.base import DetectionTimings
 from app.detection.onnx_detector import OnnxPersonDetector
 from app.detection.visualization import annotate_frame
@@ -28,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the Phase 2 ONNX person detector on an image or video."
     )
-    parser.add_argument("source", type=Path, help="input image or recorded video")
+    parser.add_argument("source", help="input image, recorded video, or RTSP URL")
     parser.add_argument("--config", type=Path, help="application YAML configuration")
     parser.add_argument("--model", type=Path, help="override detector model path")
     parser.add_argument("--output", type=Path, help="annotated image or video path")
@@ -69,9 +70,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.frame_stride <= 0:
         raise ValueError("--frame-stride must be positive")
     settings = load_settings(args.config)
-    source = args.source.expanduser().resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"input source does not exist: {source}")
+    source = resolve_video_source(args.source)
 
     model = (args.model or settings.detector_model)
     if model is None:
@@ -92,7 +91,13 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     input_type = args.input_type
     if input_type == "auto":
-        input_type = "image" if source.suffix.lower() in IMAGE_SUFFIXES else "video"
+        input_type = (
+            "video"
+            if is_network_video_source(source)
+            else "image" if source.suffix.lower() in IMAGE_SUFFIXES else "video"
+        )
+    if input_type == "image" and is_network_video_source(source):
+        raise ValueError("RTSP sources can only be processed as video")
     output = args.output or _default_output(settings, source, input_type)
 
     if input_type == "image":
@@ -142,7 +147,7 @@ def _run_image(
 
 def _run_video(
     detector: OnnxPersonDetector,
-    source: Path,
+    source: str | Path,
     output: Path,
     *,
     max_frames: int | None,
@@ -252,11 +257,11 @@ def _timing_summary(timings: Sequence[DetectionTimings]) -> dict[str, float]:
 
 def _default_output(
     settings: AppSettings,
-    source: Path,
+    source: str | Path,
     input_type: str,
 ) -> Path:
-    suffix = source.suffix if input_type == "image" else ".mp4"
-    return settings.output_dir / f"{source.stem}_detected{suffix}"
+    suffix = source.suffix if input_type == "image" and isinstance(source, Path) else ".mp4"
+    return settings.output_dir / f"{video_source_stem(source)}_detected{suffix}"
 
 
 if __name__ == "__main__":

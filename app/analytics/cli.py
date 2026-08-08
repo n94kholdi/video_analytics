@@ -41,6 +41,7 @@ from app.analytics.vertical_queue import VerticalQueueAnalyzer, VerticalQueueCon
 from app.analytics.vertical_queue_visualization import annotate_vertical_queues
 from app.analytics.visualization import annotate_people_counts
 from app.core.config import ConfigError, load_settings
+from app.core.video_source import resolve_video_source, video_source_stem
 from app.detection.onnx_detector import OnnxPersonDetector
 from app.geometry.config import (
     CameraConfig,
@@ -57,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Count tracked people in every frame of a recorded video."
     )
-    parser.add_argument("source", type=Path, help="input recorded video")
+    parser.add_argument("source", help="input recorded video or RTSP URL")
     parser.add_argument(
         "--camera-config",
         type=Path,
@@ -155,18 +156,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise ValueError("--queue-min-people must be positive")
 
     settings = load_settings(args.config)
-    source = args.source.expanduser().resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"input source does not exist: {source}")
+    source = resolve_video_source(args.source)
     model = args.model or settings.detector_model
     if model is None:
         raise ConfigError("a detector model is required via config or --model")
     reid_model = args.reid_model or settings.reid_model
     if args.enable_reid and reid_model is None:
         raise ConfigError("--enable-reid requires a ReID model via config or --reid-model")
-    output = args.output or settings.output_dir / f"{source.stem}_counted.mp4"
-    counts_csv = args.counts_csv or settings.output_dir / f"{source.stem}_counts.csv"
-    if output.expanduser().resolve() == source:
+    source_stem = video_source_stem(source)
+    output = args.output or settings.output_dir / f"{source_stem}_counted.mp4"
+    counts_csv = args.counts_csv or settings.output_dir / f"{source_stem}_counts.csv"
+    if isinstance(source, Path) and output.expanduser().resolve() == source:
         raise ValueError("output video must differ from the input video")
 
     capture = cv2.VideoCapture(str(source))
@@ -300,7 +300,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         heatmap_directory = (
             args.heatmap_dir
             or (Path(configured_directory) if configured_directory else None)
-            or settings.output_dir / f"{source.stem}_heatmaps"
+            or settings.output_dir / f"{source_stem}_heatmaps"
         )
     if heatmaps is not None:
         heatmaps.reset()
