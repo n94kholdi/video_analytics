@@ -45,6 +45,7 @@ class JobRecord:
     summary: dict[str, Any] | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
     source_type: str = "file"
+    enabled_tasks: list[str] = field(default_factory=list)
 
 
 class JobManager:
@@ -91,6 +92,7 @@ class JobManager:
         max_frames: int | None,
         enable_reid: bool = False,
         source_type: str = "file",
+        enabled_tasks: list[str] | None = None,
     ) -> JobRecord:
         get_application(application_id)
         now = _now()
@@ -112,6 +114,7 @@ class JobManager:
             max_frames=max_frames,
             enable_reid=enable_reid,
             source_type=source_type,
+            enabled_tasks=list(enabled_tasks or ()),
         )
         with self._lock:
             self._jobs[job_id] = record
@@ -299,7 +302,7 @@ class JobManager:
             command.extend(("--counts-csv", str(counts_csv), "--events-jsonl", str(events_jsonl)))
             expected["counts_csv"] = counts_csv
             expected["analytics_events"] = events_jsonl
-            if "--enable-heatmap" in preset.arguments:
+            if "--enable-heatmap" in preset.arguments or "heatmap" in record.enabled_tasks:
                 command.extend(("--heatmap-dir", str(heatmap_dir)))
         # A dashboard camera YAML describes analytics geometry.  The standalone
         # tracking and detection CLIs accept application settings under
@@ -313,6 +316,13 @@ class JobManager:
         if record.max_frames is not None:
             command.extend(("--max-frames", str(record.max_frames)))
         command.extend(preset.arguments)
+        if record.enabled_tasks:
+            if "heatmap" in record.enabled_tasks and "--enable-heatmap" not in command:
+                command.append("--enable-heatmap")
+            if "vertical_queue" in record.enabled_tasks and "--enable-queue" not in command:
+                command.extend(("--enable-queue", "--queue-mode", "vertical"))
+            if "restricted_area" in record.enabled_tasks and "--enable-restricted-area" not in command:
+                command.append("--enable-restricted-area")
         return command, expected
 
     def _collect_artifacts(
@@ -377,6 +387,7 @@ class JobManager:
             "camera_config": Path(record.camera_config).name if record.camera_config else None,
             "max_frames": record.max_frames,
             "enable_reid": record.enable_reid,
+            "enabled_tasks": record.enabled_tasks,
             "processing_width": self.processing_width,
             "frame_stride": self.frame_stride,
             "created_at": record.created_at,

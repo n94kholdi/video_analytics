@@ -125,6 +125,60 @@ def test_stream_job_passes_rtsp_url_to_existing_pipeline(tmp_path: Path) -> None
     assert configuration["input_video"] == "<live-rtsp-stream>"
 
 
+def test_combined_live_job_enables_selected_modules_once(tmp_path: Path) -> None:
+    manager = JobManager(tmp_path, python_executable="python-test")
+    job_dir = tmp_path / "combined-live"
+    job_dir.mkdir()
+    record = manager.register(
+        job_id="combined-live",
+        application_id="people_counting",
+        original_filename="live:camera",
+        camera_id="camera",
+        input_video="rtsp://mediamtx:8554/camera",
+        camera_config=None,
+        max_frames=100,
+        source_type="rtsp",
+        enabled_tasks=["people_counting", "heatmap", "vertical_queue"],
+    )
+
+    command, expected = manager._build_command(record, get_application("people_counting"))
+    configuration = json.loads((job_dir / "configuration.json").read_text())
+
+    assert command.count("--enable-heatmap") == 1
+    assert command.count("--enable-queue") == 1
+    assert command[command.index("--queue-mode") + 1] == "vertical"
+    assert expected["counts_csv"] == job_dir / "counts.csv"
+    assert configuration["enabled_tasks"] == [
+        "people_counting",
+        "heatmap",
+        "vertical_queue",
+    ]
+
+
+def test_combined_live_job_enables_restricted_area_with_camera_geometry(tmp_path: Path) -> None:
+    manager = JobManager(tmp_path, python_executable="python-test")
+    job_dir = tmp_path / "restricted-live"
+    job_dir.mkdir()
+    camera_config = job_dir / "camera.yaml"
+    camera_config.write_text("camera: {id: camera, name: Camera, source: live}\nanalytics: {enabled: []}\n")
+    record = manager.register(
+        job_id="restricted-live",
+        application_id="people_counting",
+        original_filename="live:camera",
+        camera_id="camera",
+        input_video="rtsp://mediamtx:8554/camera",
+        camera_config=camera_config,
+        max_frames=100,
+        source_type="rtsp",
+        enabled_tasks=["people_counting", "restricted_area"],
+    )
+
+    command, _ = manager._build_command(record, get_application("people_counting"))
+
+    assert command.count("--enable-restricted-area") == 1
+    assert command[command.index("--camera-config") + 1] == str(camera_config)
+
+
 def test_tracking_command_does_not_receive_analytics_camera_config(tmp_path: Path) -> None:
     manager = JobManager(tmp_path)
     job_dir = tmp_path / "job-3"

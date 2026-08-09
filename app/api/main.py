@@ -57,7 +57,9 @@ class StreamJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     stream_url: str = Field(min_length=1, max_length=2048)
-    application_id: str
+    application_id: str | None = None
+    application_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
+    camera_config_yaml: str | None = Field(default=None, max_length=2_000_000)
     camera_id: str = "live-camera"
     max_frames: int | None = Field(default=None, gt=0)
     enable_reid: bool = False
@@ -235,17 +237,41 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
     protocol conversion and the CV pipeline remains unchanged.
     """
 
-    try:
-        preset = get_application(request.application_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if preset.requires_camera_config:
+    if request.application_id is not None and request.application_ids is not None:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"{preset.name} requires camera geometry; use a preset without "
-                "camera YAML for live jobs"
-            ),
+            detail="provide application_id or application_ids, not both",
+        )
+
+    enabled_tasks = request.application_ids
+    if enabled_tasks is not None:
+        allowed_live_tasks = {"people_counting", "heatmap", "vertical_queue", "restricted_area"}
+        if len(enabled_tasks) != len(set(enabled_tasks)):
+            raise HTTPException(status_code=422, detail="application_ids must be unique")
+        unsupported = sorted(set(enabled_tasks) - allowed_live_tasks)
+        if unsupported:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unsupported combined live analytics: {', '.join(unsupported)}",
+            )
+        # These modules share detection and tracking, so a single analytics CLI
+        # process can calculate all selected results without decoding the stream
+        # or running the person detector more than once.
+        application_id = "people_counting"
+        preset = get_application(application_id)
+    else:
+        application_id = request.application_id or "people_counting"
+        try:
+            preset = get_application(application_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    needs_camera_config = preset.requires_camera_config or bool(
+        enabled_tasks and "restricted_area" in enabled_tasks
+    )
+    if needs_camera_config and not request.camera_config_yaml:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{preset.name} requires camera geometry",
         )
     if request.enable_reid and preset.module == "app.detection.cli":
         raise HTTPException(status_code=422, detail="ReID is only available for tracking jobs")
@@ -253,17 +279,26 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
     job_id = uuid4().hex
     job_directory = manager.root / job_id
     job_directory.mkdir(parents=True)
+    config_path: Path | None = None
     try:
+        if request.camera_config_yaml:
+            config_path = job_directory / "camera.yaml"
+            config_path.write_text(request.camera_config_yaml, encoding="utf-8")
+            try:
+                load_camera_config(config_path)
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=f"invalid camera YAML: {exc}") from exc
         record = manager.register(
             job_id=job_id,
-            application_id=request.application_id,
+            application_id=application_id,
             original_filename=f"live:{request.camera_id}",
             camera_id=request.camera_id,
             input_video=request.stream_url,
-            camera_config=None,
+            camera_config=config_path,
             max_frames=request.max_frames,
             enable_reid=request.enable_reid,
             source_type="rtsp",
+            enabled_tasks=enabled_tasks,
         )
     except Exception:
         shutil.rmtree(job_directory, ignore_errors=True)
@@ -271,6 +306,38 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
 
     manager.enqueue(job_id)
     return {"data": manager.public_dict(record)}
+
+
+@app.get("/api/v1/restricted-area-events")
+def restricted_area_events(
+    camera_id: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict[str, list[dict[str, object]]]:
+    """Return recent entry/exit lifecycle events across live and recorded jobs."""
+
+    rows: list[dict[str, object]] = []
+    allowed = {"restricted_area_entered", "restricted_area_exited"}
+    for record in manager.list():
+        if camera_id and record.camera_id != camera_id:
+            continue
+        path = Path(record.job_directory) / "analytics_events.jsonl"
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event_type") not in allowed:
+                continue
+            event["job_id"] = record.id
+            rows.append(event)
+    rows.sort(key=lambda item: float(item.get("timestamp", 0)), reverse=True)
+    return {"data": rows[:limit]}
 
 
 @app.get("/api/v1/jobs/{job_id}/artifacts/{artifact_key}")
