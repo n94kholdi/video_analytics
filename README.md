@@ -258,9 +258,12 @@ OpenAPI documentation is available at `http://localhost:8000/docs`. Uploaded
 videos and generated artifacts from the dashboard are stored under
 `output/dashboard/<job-id>/`.
 The API exposes detection, tracking, counting, restricted-area, heatmap,
-vertical-queue, configured-queue, and combined-analysis presets. Applications
-that depend on configured polygons require a camera YAML upload; the other
-presets can run using only a recorded video.
+vertical-queue, configured-queue, and combined-analysis presets. Recorded-video
+analytics use `configs/cameras/example_lobby.yaml` when no camera YAML is
+uploaded. A validated YAML uploaded with a recorded job is persisted under the
+analytics jobs directory and becomes the default for later recorded jobs, so
+it only needs to be uploaded once. Set `VIDEO_ANALYTICS_CAMERA_CONFIG_PATH` to
+choose a different persistent path.
 
 Live RTSP sources use the same processing commands through
 `POST /api/v1/stream-jobs`. The JSON body accepts `stream_url`,
