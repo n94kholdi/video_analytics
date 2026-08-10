@@ -245,7 +245,13 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
 
     enabled_tasks = request.application_ids
     if enabled_tasks is not None:
-        allowed_live_tasks = {"people_counting", "heatmap", "vertical_queue", "restricted_area"}
+        allowed_live_tasks = {
+            "people_counting",
+            "heatmap",
+            "vertical_queue",
+            "configured_queue",
+            "restricted_area",
+        }
         if len(enabled_tasks) != len(set(enabled_tasks)):
             raise HTTPException(status_code=422, detail="application_ids must be unique")
         unsupported = sorted(set(enabled_tasks) - allowed_live_tasks)
@@ -253,6 +259,11 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
             raise HTTPException(
                 status_code=422,
                 detail=f"unsupported combined live analytics: {', '.join(unsupported)}",
+            )
+        if "vertical_queue" in enabled_tasks and "configured_queue" in enabled_tasks:
+            raise HTTPException(
+                status_code=422,
+                detail="vertical_queue and configured_queue cannot run together",
             )
         # These modules share detection and tracking, so a single analytics CLI
         # process can calculate all selected results without decoding the stream
@@ -266,7 +277,8 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     needs_camera_config = preset.requires_camera_config or bool(
-        enabled_tasks and "restricted_area" in enabled_tasks
+        enabled_tasks
+        and ({"restricted_area", "configured_queue"} & set(enabled_tasks))
     )
     if needs_camera_config and not request.camera_config_yaml:
         raise HTTPException(

@@ -42,6 +42,12 @@ def test_restricted_area_exposes_lifecycle_counters() -> None:
     assert "exit_count" not in keys
 
 
+def test_configured_queue_exposes_people_speed_and_per_queue_details() -> None:
+    keys = {item.key for item in get_application("configured_queue").metrics}
+
+    assert {"queue_length", "queue_speed", "queue_details"} <= keys
+
+
 def test_heatmap_applications_expose_top_crowded_regions_metric() -> None:
     for application_id in ("heatmap", "full_analytics"):
         metrics = get_application(application_id).metrics
@@ -176,6 +182,31 @@ def test_combined_live_job_enables_restricted_area_with_camera_geometry(tmp_path
     command, _ = manager._build_command(record, get_application("people_counting"))
 
     assert command.count("--enable-restricted-area") == 1
+    assert command[command.index("--camera-config") + 1] == str(camera_config)
+
+
+def test_combined_live_job_enables_configured_queue_with_camera_geometry(tmp_path: Path) -> None:
+    manager = JobManager(tmp_path, python_executable="python-test")
+    job_dir = tmp_path / "queue-live"
+    job_dir.mkdir()
+    camera_config = job_dir / "camera.yaml"
+    camera_config.write_text("camera: {id: camera, name: Camera, source: live}\nanalytics: {enabled: []}\n")
+    record = manager.register(
+        job_id="queue-live",
+        application_id="people_counting",
+        original_filename="live:camera",
+        camera_id="camera",
+        input_video="rtsp://mediamtx:8554/camera",
+        camera_config=camera_config,
+        max_frames=100,
+        source_type="rtsp",
+        enabled_tasks=["people_counting", "configured_queue"],
+    )
+
+    command, _ = manager._build_command(record, get_application("people_counting"))
+
+    assert command.count("--enable-queue") == 1
+    assert command[command.index("--queue-mode") + 1] == "configured"
     assert command[command.index("--camera-config") + 1] == str(camera_config)
 
 

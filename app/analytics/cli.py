@@ -700,6 +700,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "queue_length": sum(queue_lengths) if queue_lengths else None,
                     "queue_wait_seconds": sum(queue_waits) / len(queue_waits) if queue_waits else None,
                     "queue_speed": sum(queue_speeds) / len(queue_speeds) if queue_speeds else None,
+                    "queue_details": {
+                        item.queue_id: {
+                            "people": item.raw_count,
+                            "average_speed_pixels_per_second": item.average_speed_pixels_per_second,
+                            "average_speed_metres_per_second": item.average_speed_metres_per_second,
+                        }
+                        for item in queue_statuses
+                    } if queue_statuses else None,
                     "average_person_speed": (
                         speed_result.snapshot.average_speed_pixels_per_second
                         if speed_result is not None else None

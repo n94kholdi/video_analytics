@@ -321,6 +321,8 @@ class JobManager:
                 command.append("--enable-heatmap")
             if "vertical_queue" in record.enabled_tasks and "--enable-queue" not in command:
                 command.extend(("--enable-queue", "--queue-mode", "vertical"))
+            if "configured_queue" in record.enabled_tasks and "--enable-queue" not in command:
+                command.extend(("--enable-queue", "--queue-mode", "configured"))
             if "restricted_area" in record.enabled_tasks and "--enable-restricted-area" not in command:
                 command.append("--enable-restricted-area")
         return command, expected
