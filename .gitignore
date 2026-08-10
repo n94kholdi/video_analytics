@@ -26,6 +26,7 @@ dist/
 # Phase outputs. Keep the directory itself as part of the scaffold.
 outputs/*
 !outputs/.gitkeep
+output/dashboard/*
 
 # Generated runtime artifacts outside the default output directory
 *.mp4
@@ -42,4 +43,3 @@ outputs/*
 *heatmap*.png
 *heatmap*.npy
 *heatmap*.csv
-

@@ -1,0 +1,20 @@
+services:
+  api:
+    build:
+      context: .
+    image: video-analytics-mvp:local
+    init: true
+    ports:
+      - "${VIDEO_ANALYTICS_PORT:-8000}:8000"
+    environment:
+      VIDEO_ANALYTICS_CORS_ORIGINS: "${VIDEO_ANALYTICS_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}"
+      VIDEO_ANALYTICS_JOB_WORKERS: "${VIDEO_ANALYTICS_JOB_WORKERS:-1}"
+      VIDEO_ANALYTICS_MAX_UPLOAD_BYTES: "${VIDEO_ANALYTICS_MAX_UPLOAD_BYTES:-1073741824}"
+      VIDEO_ANALYTICS_PROCESSING_WIDTH: "${VIDEO_ANALYTICS_PROCESSING_WIDTH:-1280}"
+      VIDEO_ANALYTICS_FRAME_STRIDE: "${VIDEO_ANALYTICS_FRAME_STRIDE:-10}"
+    volumes:
+      - analytics-jobs:/app/output/dashboard
+    restart: unless-stopped
+
+volumes:
+  analytics-jobs:

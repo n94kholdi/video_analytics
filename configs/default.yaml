@@ -11,7 +11,14 @@ onnx:
   providers:
     - CPUExecutionProvider
   detector_model: ../../All_weights/Weights_final/HumanDetection_light_input_640.onnx
+  reid_model: All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx
 
 detector:
   confidence_threshold: 0.40
   iou_threshold: 0.70
+
+tracker:
+  activation_threshold: 0.40
+  lost_track_buffer: 30
+  match_threshold: 0.30
+  history_size: 90
