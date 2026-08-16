@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 api = [
     "fastapi>=0.110,<1",
+    "psycopg[binary,pool]>=3.2,<4",
     "python-multipart>=0.0.9,<1",
     "uvicorn[standard]>=0.27,<1",
 ]

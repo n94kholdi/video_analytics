@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import asyncio
 import time
 from typing import Annotated, Iterator
 from uuid import uuid4
@@ -20,6 +21,8 @@ from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
 from app.core.config import PROJECT_ROOT
 from app.geometry.config import load_camera_config
+from app.management.api import rollup_worker, router as management_router
+from app.management.repository import analytics_repository
 
 
 JOBS_ROOT = Path(
@@ -49,6 +52,21 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+app.include_router(management_router)
+
+
+@app.on_event("startup")
+async def start_analytics_store() -> None:
+    analytics_repository.open()
+    app.state.analytics_rollup_task = asyncio.create_task(rollup_worker())
+
+
+@app.on_event("shutdown")
+async def stop_analytics_store() -> None:
+    task = getattr(app.state, "analytics_rollup_task", None)
+    if task is not None:
+        task.cancel()
+    analytics_repository.close()
 
 
 class StreamJobRequest(BaseModel):
@@ -85,8 +103,9 @@ class StreamJobRequest(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, object]:
+    analytical_store = analytics_repository.health()
+    return {"status": "ok" if analytical_store else "degraded", "analyticsStore": analytical_store}
 
 
 @app.get("/api/v1/applications")

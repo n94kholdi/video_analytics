@@ -11,6 +11,7 @@ from time import perf_counter
 from typing import Sequence
 
 import cv2
+import numpy as np
 
 from app.api.live import (
     LiveReporter,
@@ -50,6 +51,7 @@ from app.geometry.config import (
     load_camera_config,
 )
 from app.storage import JsonlEventSink
+from app.management.publisher import MinutePublisher
 from app.tracking.bytetrack import ByteTrackAdapter
 from app.tracking.visualization import annotate_tracks
 
@@ -242,6 +244,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.live_dir,
         args.job_id,
         total_frames=processed_frame_count(capture, args.max_frames, args.frame_stride),
+    )
+    aggregate_publisher = MinutePublisher(
+        camera_counting.camera_id,
+        camera_config.name if camera_config is not None else camera_counting.camera_id,
     )
     counter = PeopleCounter((camera_counting,))
     restricted = (
@@ -703,6 +709,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "queue_details": {
                         item.queue_id: {
                             "people": item.raw_count,
+                            "current_wait_seconds": item.approximate_current_waiting_seconds,
+                            "completed_wait_count": item.completed_wait_count,
+                            "last_completed_wait_seconds": item.last_completed_waiting_seconds,
+                            "overflow": item.overflow,
                             "average_speed_pixels_per_second": item.average_speed_pixels_per_second,
                             "average_speed_metres_per_second": item.average_speed_metres_per_second,
                         }
@@ -721,7 +731,19 @@ def main(argv: Sequence[str] | None = None) -> None:
                         if heatmaps is not None
                         else None
                     ),
+                    "management_spatial_layers": (
+                        _management_spatial_layers(heatmap_snapshot.ground.occupancy, heatmap_snapshot.ground.dwell_seconds)
+                        if heatmaps is not None and heatmap_snapshot.ground is not None
+                        and frames % max(1, round(output_fps * 900)) == 0
+                        else None
+                    ),
                 }
+                aggregate_events = list(counted.events)
+                if intrusion is not None:
+                    aggregate_events.extend(intrusion.events)
+                if queue_result is not None:
+                    aggregate_events.extend(queue_result.events)
+                aggregate_publisher.observe(live_metrics, aggregate_events)
                 preview_frame = final_frame
                 if heatmaps is not None:
                     preview_frame = overlay_heatmap(
@@ -743,6 +765,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     )
                 reporter.publish(frames - 1, live_metrics, frame=preview_frame)
     finally:
+        aggregate_publisher.close()
         capture.release()
         writer.release()
         if heatmap_video_writer is not None:
@@ -903,6 +926,35 @@ def _crowded_regions(regions: Sequence[CrowdedRegion]) -> list[dict[str, object]
         }
         for region in regions
     ]
+
+
+def _management_spatial_layers(occupancy: np.ndarray, dwell_seconds: np.ndarray) -> dict[str, list[dict[str, float]]]:
+    """Downsample full heatmaps to a bounded management grid every 15 minutes."""
+
+    occupancy_points = _management_grid_points(occupancy)
+    dwell_points = _management_grid_points(dwell_seconds / 60.0)
+    maximum = max((point["value"] for point in occupancy_points), default=1.0) or 1.0
+    congestion = [{**point, "value": point["value"] * 100 / maximum, "intensity": point["value"] / maximum} for point in occupancy_points]
+    return {
+        "occupancy": occupancy_points,
+        "dwell": dwell_points,
+        "traffic": occupancy_points,
+        "congestion": congestion,
+    }
+
+
+def _management_grid_points(values: np.ndarray) -> list[dict[str, float]]:
+    rows, columns = values.shape
+    points: list[dict[str, float]] = []
+    maximum = float(np.max(values)) if values.size else 0.0
+    for row in range(3):
+        y1, y2 = round(row * rows / 3), round((row + 1) * rows / 3)
+        for column in range(4):
+            x1, x2 = round(column * columns / 4), round((column + 1) * columns / 4)
+            value = float(np.mean(values[y1:y2, x1:x2])) if y2 > y1 and x2 > x1 else 0.0
+            points.append({"x": (column + .5) * 25, "y": (row + .5) * 100 / 3,
+                           "value": value, "intensity": value / maximum if maximum > 0 else 0.0})
+    return points
 
 
 if __name__ == "__main__":
