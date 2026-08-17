@@ -34,6 +34,7 @@ dev = [
 video-analytics-detect = "app.detection.cli:main"
 video-analytics-track = "app.tracking.cli:main"
 video-analytics-count = "app.analytics.cli:main"
+video-analytics-synthetic = "app.synthetic.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

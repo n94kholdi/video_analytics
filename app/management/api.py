@@ -108,6 +108,14 @@ def spatial(query: Annotated[AnalyticsQuery, Depends(_read_query)], _: Annotated
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/management/overview", dependencies=[])
+def overview(query: Annotated[AnalyticsQuery, Depends(_read_query)], _: Annotated[None, Depends(_check_read_key)]) -> dict[str, object]:
+    try:
+        return {"data": management_analytics_service.overview(query)}
+    except AnalyticsUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 async def rollup_worker() -> None:
     interval = max(30, int(os.environ.get("ANALYTICS_ROLLUP_INTERVAL_SECONDS", "60")))
     while True:

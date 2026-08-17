@@ -21,7 +21,7 @@ COPY All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx ./All_weights/We
 
 RUN python -m pip install --no-cache-dir ".[api]" \
     && useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/output/dashboard /app/outputs \
+    && mkdir -p /app/output/dashboard /app/output/outbox /app/outputs \
     && chown -R appuser:appuser /app/output /app/outputs
 
 USER appuser

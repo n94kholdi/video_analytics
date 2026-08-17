@@ -67,9 +67,16 @@ class AnalyticsRepository:
         except AnalyticsUnavailable:
             return False
 
-    def ingest(self, observations: Sequence[CameraMinute], sla_target_seconds: float) -> int:
+    def ingest(
+        self,
+        observations: Sequence[CameraMinute],
+        sla_target_seconds: float,
+        *,
+        sync_sources: bool = True,
+    ) -> int:
         with self.connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT analytics_sync_camera_sources()")
+            if sync_sources:
+                cursor.execute("SELECT analytics_sync_camera_sources()")
             for item in observations:
                 cursor.execute(
                     """

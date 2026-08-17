@@ -231,6 +231,31 @@ class ManagementAnalyticsService:
             "layers": layers, "zones": _zone_metrics(current_rows), "events": self._events(query, start, end),
         }
 
+    def overview(self, query: AnalyticsQuery) -> dict[str, object]:
+        flow = self.people_flow(query)
+        queue = self.queues(query)
+        spatial = self.spatial(query)
+        return {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "dataStatus": flow["dataStatus"],
+            "kpis": {
+                "visitors": flow["kpis"]["uniqueVisitors"],
+                "entries": flow["kpis"]["entries"],
+                "peakOccupancy": flow["kpis"]["peakOccupancy"],
+                "averageDwellMinutes": _metric(_average_dwell(spatial["zones"])),
+                "averageWaitMinutes": queue["kpis"]["averageWaitMinutes"],
+                "queueSlaPercent": queue["kpis"]["slaPercent"],
+            },
+            "trend": [{"timestamp": row["timestamp"], "traffic": row["entries"], "occupancy": row["occupancy"]} for row in flow["trend"]],
+            "alerts": _alerts(flow["events"]),
+            "activityHeatmap": flow["activityHeatmap"],
+            "queue": _queue_summary_card(queue["kpis"], queue["queues"]),
+            "ranking": _ranking(flow["locations"], queue["locations"]),
+            "spatialHeatmap": [{"x": point["x"], "y": point["y"], "intensity": point["intensity"]}
+                                for point in _merge_spatial(self._spatial_rows(query, *_period(query)), "occupancy")],
+            "importantChanges": _important_changes(flow["kpis"], queue["kpis"]),
+        }
+
     def _expected_sources(self, query: AnalyticsQuery) -> int:
         predicate, params = location_predicate("s", query.location_type, query.location_id)
         row = self.repository.row(f"SELECT count(*) AS count FROM analytics_camera_source s WHERE s.enabled AND {predicate}", params)
@@ -258,11 +283,18 @@ class ManagementAnalyticsService:
         predicate, params = rollup_location_predicate("h", rollup_type, query.location_type, query.location_id)
         time_sql, time_params = _time_predicate("h", "bucket_start", query)
         trunc = "day" if query.bucket == "day" else "hour"
+        occupancy_aggregation = "AVG(occupancy)" if query.bucket == "day" else "SUM(occupancy)"
         return self.repository.rows(f"""
-          SELECT date_trunc('{trunc}',bucket_start) timestamp,
-            SUM(occupancy_sum) occupancy,
-            SUM(entries) entries,SUM(exits) exits,CASE WHEN MAX(expected_sources)=1 THEN MAX(unique_visitors) END unique_visitors
-          FROM analytics_location_hour h WHERE h.location_type=%s AND bucket_start >= %s AND bucket_start < %s AND {predicate} AND {time_sql}
+          WITH hourly AS (
+            SELECT bucket_start,SUM(occupancy_sum) occupancy,SUM(entries) entries,SUM(exits) exits,
+              CASE WHEN MAX(expected_sources)=1 THEN MAX(unique_visitors) END unique_visitors
+            FROM analytics_location_hour h
+            WHERE h.location_type=%s AND bucket_start >= %s AND bucket_start < %s AND {predicate} AND {time_sql}
+            GROUP BY bucket_start
+          )
+          SELECT date_trunc('{trunc}',bucket_start) timestamp,{occupancy_aggregation} occupancy,
+            SUM(entries) entries,SUM(exits) exits,MAX(unique_visitors) unique_visitors
+          FROM hourly
           GROUP BY 1 ORDER BY 1
         """, [rollup_type, start, end, *params, *time_params])
 
@@ -536,6 +568,55 @@ def _zone_metrics(rows: list[dict[str, object]]) -> list[dict[str, object]]:
 def _average_point_value(rows: list[dict[str, object]], layer: str) -> float | None:
     values = [float(point["value"]) for row in rows if row["layer"] == layer for point in _points(row)]
     return round(sum(values)/len(values), 2) if values else None
+
+
+def _average_dwell(zones: list[dict[str, object]]) -> float | None:
+    values = [float(zone["averageDwellMinutes"]) for zone in zones if zone.get("averageDwellMinutes") is not None]
+    return round(sum(values) / len(values), 2) if values else None
+
+
+def _alerts(events: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [{"id": event["id"], "severity": event["severity"], "title": event["title"],
+             "locationName": event["locationName"], "occurredAt": event["occurredAt"]}
+            for event in events if event["severity"] in ("critical", "warning")][:10]
+
+
+def _queue_summary_card(queue_kpis: dict[str, object], queues: list[dict[str, object]]) -> dict[str, object]:
+    active = [queue for queue in queues if (queue.get("currentLength") or 0) > 0]
+    longest = max(active, key=lambda queue: queue.get("currentLength") or 0, default=None)
+    return {
+        "averageWaitMinutes": queue_kpis["averageWaitMinutes"],
+        "slaPercent": queue_kpis["slaPercent"],
+        "activeQueues": len(active),
+        "longestQueueLocation": longest["locationName"] if longest else None,
+    }
+
+
+def _ranking(flow_locations: list[dict[str, object]], queue_locations: list[dict[str, object]]) -> list[dict[str, object]]:
+    queue_by_id = {row["locationId"]: row for row in queue_locations}
+    rows = [{
+        "locationId": row["locationId"], "locationType": row["locationType"], "name": row["name"],
+        "parentName": row["parentName"], "traffic": row["entries"], "occupancy": row["value"],
+        "queueScore": queue_by_id.get(row["locationId"], {}).get("slaPercent"),
+    } for row in flow_locations]
+    rows.sort(key=lambda row: row["traffic"] if row["traffic"] is not None else -1, reverse=True)
+    return rows[:20]
+
+
+def _important_changes(flow_kpis: dict[str, object], queue_kpis: dict[str, object]) -> list[str]:
+    candidates = [
+        ("میانگین اشغال", flow_kpis["averageOccupancy"]["changePercent"]),
+        ("ورودی‌ها", flow_kpis["entries"]["changePercent"]),
+        ("میانگین زمان انتظار صف", queue_kpis["averageWaitMinutes"]["changePercent"]),
+        ("درصد رعایت SLA صف", queue_kpis["slaPercent"]["changePercent"]),
+    ]
+    changes = []
+    for label, change in candidates:
+        if change is None or abs(change) < 5:
+            continue
+        direction = "افزایش" if change > 0 else "کاهش"
+        changes.append(f"{label} {direction} {abs(change)}% نسبت به دوره قبل داشته است.")
+    return changes
 
 
 management_analytics_service = ManagementAnalyticsService()

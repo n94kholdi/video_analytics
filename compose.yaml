@@ -20,6 +20,8 @@ services:
     volumes:
       - analytics-jobs:/app/output/dashboard
       - analytics-outbox:/app/output/outbox
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:
