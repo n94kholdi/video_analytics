@@ -41,7 +41,7 @@ from app.analytics.speed import CameraSpeedConfig, SpeedEstimator
 from app.analytics.vertical_queue import VerticalQueueAnalyzer, VerticalQueueConfig
 from app.analytics.vertical_queue_visualization import annotate_vertical_queues
 from app.analytics.visualization import annotate_people_counts
-from app.core.config import ConfigError, load_settings
+from app.core.config import ConfigError, DEFAULT_CAMERA_CONFIG_PATH, load_settings
 from app.core.video_source import resolve_video_source, video_source_stem
 from app.detection.onnx_detector import OnnxPersonDetector
 from app.geometry.config import (
@@ -55,6 +55,8 @@ from app.management.publisher import MinutePublisher
 from app.tracking.bytetrack import ByteTrackAdapter
 from app.tracking.visualization import annotate_tracks
 
+DEFAULT_CAMERA_CONFIG = DEFAULT_CAMERA_CONFIG_PATH
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -64,7 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--camera-config",
         type=Path,
-        help="camera YAML with occupancy polygons; defaults to the whole frame",
+        default=DEFAULT_CAMERA_CONFIG if DEFAULT_CAMERA_CONFIG.exists() else None,
+        help=(
+            "camera YAML with occupancy polygons; defaults to "
+            "configs/cameras/example_lobby.yaml"
+        ),
     )
     parser.add_argument("--config", type=Path, help="application YAML configuration")
     parser.add_argument("--model", type=Path, help="override detector model path")

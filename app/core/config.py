@@ -12,6 +12,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
+DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "configs" / "cameras" / "example_lobby.yaml"
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
 _ALLOWED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 

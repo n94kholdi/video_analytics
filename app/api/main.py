@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
-from app.core.config import PROJECT_ROOT
+from app.core.config import DEFAULT_CAMERA_CONFIG_PATH, PROJECT_ROOT
 from app.geometry.config import load_camera_config
 from app.management.api import rollup_worker, router as management_router
 from app.management.repository import analytics_repository
@@ -202,7 +202,16 @@ async def create_job(
     video_suffix = Path(video.filename or "").suffix.lower()
     if video_suffix not in ALLOWED_VIDEO_SUFFIXES:
         raise HTTPException(status_code=422, detail="unsupported recorded-video file type")
-    if preset.requires_camera_config and camera_config is None:
+    # Browsers submit an empty file part for an untouched <input type="file">,
+    # so an unset optional upload still arrives here with camera_config.filename == "".
+    if camera_config is not None and not (camera_config.filename or "").strip():
+        await camera_config.close()
+        camera_config = None
+    if (
+        preset.requires_camera_config
+        and camera_config is None
+        and not DEFAULT_CAMERA_CONFIG_PATH.exists()
+    ):
         raise HTTPException(
             status_code=422,
             detail=f"{preset.name} requires a camera YAML configuration",
@@ -221,6 +230,10 @@ async def create_job(
                 raise HTTPException(status_code=422, detail="camera configuration must be YAML")
             config_path = job_directory / "camera.yaml"
             await _save_upload(camera_config, config_path, limit=2_000_000)
+        elif DEFAULT_CAMERA_CONFIG_PATH.exists():
+            config_path = job_directory / "camera.yaml"
+            shutil.copyfile(DEFAULT_CAMERA_CONFIG_PATH, config_path)
+        if config_path is not None:
             try:
                 load_camera_config(config_path)
             except (OSError, ValueError) as exc:
