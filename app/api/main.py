@@ -19,7 +19,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.api.frames import FrameCaptureError, encode_jpeg_data_url, grab_stream_frame, require_rtsp_url
+from app.api.frames import (
+    FrameCaptureError,
+    encode_jpeg_data_url,
+    grab_stream_frame,
+    iter_mjpeg_preview,
+    require_rtsp_url,
+)
 from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
 from app.core.config import DEFAULT_CAMERA_CONFIG_PATH, PROJECT_ROOT
@@ -244,6 +250,32 @@ def extract_stream_frame(request: StreamFrameRequest) -> dict[str, object]:
         return {"data": encode_jpeg_data_url(frame)}
     except FrameCaptureError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/preview-stream")
+def live_camera_preview(request: StreamFrameRequest) -> StreamingResponse:
+    """Stream an unannotated MJPEG view of the camera used by live analytics."""
+
+    try:
+        frames = iter_mjpeg_preview(request.stream_url)
+        first = next(frames)
+    except StopIteration as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="could not read a frame from the camera",
+        ) from exc
+    except FrameCaptureError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    def body() -> Iterator[bytes]:
+        yield first
+        yield from frames
+
+    return StreamingResponse(
+        body(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/v1/jobs", status_code=202)

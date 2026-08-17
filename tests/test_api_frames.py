@@ -6,7 +6,13 @@ from unittest.mock import MagicMock
 
 import cv2
 import numpy as np
-from app.api.frames import FrameCaptureError, encode_jpeg_data_url, grab_stream_frame, require_rtsp_url
+from app.api.frames import (
+    FrameCaptureError,
+    encode_jpeg_data_url,
+    grab_stream_frame,
+    iter_mjpeg_preview,
+    require_rtsp_url,
+)
 
 
 class _FakeCapture:
@@ -93,3 +99,30 @@ def test_grab_stream_frame_times_out(monkeypatch) -> None:
         assert exc.status_code == 504
     else:
         raise AssertionError("a hung capture must time out")
+
+
+def test_iter_mjpeg_preview_yields_multipart_jpegs(monkeypatch) -> None:
+    first = np.full((40, 80, 3), 40, dtype=np.uint8)
+    second = np.full((40, 80, 3), 200, dtype=np.uint8)
+    capture = _FakeCapture([first, second])
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _url: capture)
+
+    chunks = list(iter_mjpeg_preview("rtsp://mediamtx:8554/cam", fps=100, timeout_seconds=1))
+
+    assert len(chunks) == 2
+    assert all(chunk.startswith(b"--frame\r\nContent-Type: image/jpeg") for chunk in chunks)
+    assert all(b"\xff\xd8" in chunk for chunk in chunks)
+    assert capture.released
+
+
+def test_iter_mjpeg_preview_fails_when_stream_cannot_open(monkeypatch) -> None:
+    capture = _FakeCapture([], opened=False)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _url: capture)
+
+    try:
+        next(iter_mjpeg_preview("rtsp://mediamtx:8554/offline", fps=100, timeout_seconds=1))
+    except FrameCaptureError as exc:
+        assert "could not open" in str(exc)
+    else:
+        raise AssertionError("closed streams must raise FrameCaptureError")
+    assert capture.released
