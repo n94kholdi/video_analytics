@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import os
 import json
 from pathlib import Path
@@ -20,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.api.frames import FrameCaptureError, encode_jpeg_data_url, grab_stream_frame, require_rtsp_url
 from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
 from app.core.config import DEFAULT_CAMERA_CONFIG_PATH, PROJECT_ROOT
@@ -88,10 +88,7 @@ class StreamJobRequest(BaseModel):
     @field_validator("stream_url")
     @classmethod
     def validate_stream_url(cls, value: str) -> str:
-        candidate = value.strip()
-        if not re.match(r"^rtsps?://[^/]+/.+", candidate, flags=re.IGNORECASE):
-            raise ValueError("stream_url must be an RTSP URL with a stream path")
-        return candidate
+        return require_rtsp_url(value)
 
     @field_validator("camera_id")
     @classmethod
@@ -102,7 +99,19 @@ class StreamJobRequest(BaseModel):
                 "camera_id must use 1-100 letters, digits, dots, underscores, or hyphens"
             )
         return candidate
-        return candidate
+
+
+class StreamFrameRequest(BaseModel):
+    """Capture a single still from the same RTSP source used by live jobs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stream_url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("stream_url")
+    @classmethod
+    def validate_stream_url(cls, value: str) -> str:
+        return require_rtsp_url(value)
 
 
 @app.get("/health")
@@ -216,20 +225,25 @@ async def extract_first_frame(video: Annotated[UploadFile, File(...)]) -> dict[s
     if not ok or frame is None:
         raise HTTPException(status_code=422, detail="could not read the first frame of this video")
 
-    height, width = frame.shape[:2]
-    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
-    if not ok:
-        raise HTTPException(status_code=500, detail="failed to encode frame")
+    try:
+        return {"data": encode_jpeg_data_url(frame)}
+    except FrameCaptureError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    data_url = "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
-    return {
-        "data": {
-            "data_url": data_url,
-            "width": width,
-            "height": height,
-            "aspect_ratio": width / height,
-        }
-    }
+
+@app.post("/api/v1/frames/from-stream")
+def extract_stream_frame(request: StreamFrameRequest) -> dict[str, object]:
+    """Grab one still from a live RTSP camera for region drawing.
+
+    Live analytics already opens this same URL with OpenCV. The zone editor
+    only needs a single reference frame, not a browser WebRTC/HLS session.
+    """
+
+    try:
+        frame = grab_stream_frame(request.stream_url)
+        return {"data": encode_jpeg_data_url(frame)}
+    except FrameCaptureError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @app.post("/api/v1/jobs", status_code=202)
