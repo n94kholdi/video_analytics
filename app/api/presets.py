@@ -60,13 +60,14 @@ RESTRICTED_METRICS = (
     MetricDefinition("restricted_exits", "Restricted-area exits", aggregation="total", display="counter"),
     MetricDefinition("restricted_violations", "Confirmed restricted-area alerts", aggregation="total", display="counter"),
 )
-QUEUE_METRICS = COUNTING_METRICS + (
-    MetricDefinition("queue_length", "Detected people queue", unit="people", display="chart"),
+QUEUE_STATUS_METRICS = (
+    MetricDefinition("queue_length", "People in the queue", unit="people", display="chart"),
     MetricDefinition("queue_wait_seconds", "Queue waiting time", unit="s", aggregation="average", display="chart"),
     MetricDefinition("queue_speed", "Queue movement speed", unit="px/s", aggregation="average", display="chart"),
     MetricDefinition("queue_details", "People and speed per configured queue", value_type="table", display="table"),
     MetricDefinition("average_person_speed", "Average person speed", unit="px/s", aggregation="average", display="chart"),
 )
+QUEUE_METRICS = COUNTING_METRICS + QUEUE_STATUS_METRICS
 CROWDED_REGION_METRIC = MetricDefinition(
     "top_crowded_regions",
     "Top crowded regions",
@@ -115,6 +116,15 @@ APPLICATIONS = (
         "app.analytics.cli",
         ("--enable-queue", "--queue-mode", "vertical"),
         metrics=QUEUE_METRICS,
+    ),
+    ApplicationPreset(
+        "configured_queue",
+        "Queue line monitoring",
+        "Count people inside a user-drawn queue polygon and estimate queue movement speed.",
+        "app.analytics.cli",
+        ("--enable-queue", "--queue-mode", "configured"),
+        True,
+        TRACKING_METRICS + QUEUE_STATUS_METRICS,
     ),
 )
 

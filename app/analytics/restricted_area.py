@@ -10,8 +10,15 @@ from uuid import uuid4
 
 from app.core.models import Event, TrackObservation
 from app.geometry.config import CameraConfig, RestrictedZone
-from app.geometry.primitives import point_in_polygon
+from app.geometry.primitives import bbox_polygon_coverage_ratio, point_in_polygon
 from app.storage import EventSink
+
+MINIMUM_BBOX_COVERAGE_RATIO = 0.75
+"""Fraction of a person's bbox area that must overlap a zone to count as inside.
+
+Foot-point containment alone is too easy to satisfy at a region's edge; this
+also requires most of the person's bbox to actually be inside the polygon.
+"""
 
 
 class IntrusionState(str, Enum):
@@ -212,6 +219,8 @@ class RestrictedAreaDetector:
                 track_id
                 for track_id, observation in confirmed.items()
                 if point_in_polygon(observation.foot_point, polygon)
+                and bbox_polygon_coverage_ratio(observation.xyxy, polygon)
+                >= MINIMUM_BBOX_COVERAGE_RATIO - 1e-9
             }
             for track_id in sorted(inside_ids):
                 events.extend(

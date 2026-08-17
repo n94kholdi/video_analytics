@@ -257,6 +257,29 @@ def test_events_persist_through_shared_sink_and_jsonl(tmp_path: Path) -> None:
     assert rows[1]["zone_id"] == "secure"
 
 
+def test_foot_point_inside_but_bbox_mostly_outside_zone_does_not_enter() -> None:
+    # Zone spans x in [20, 80]; this bbox straddles the right edge so only
+    # two-thirds of its area overlaps the zone, below the 0.75 requirement.
+    detector = _detector(_zone("secure"))
+    observation = TrackObservation(
+        camera_id="cam-a",
+        track_id=1,
+        timestamp=0.0,
+        frame_index=0,
+        xyxy=(76.0, 38.0, 82.0, 50.0),
+        foot_point=(79.0, 50.0),
+        detection_confidence=0.9,
+        confirmed=True,
+        trajectory=(),
+    )
+
+    result = detector.update("cam-a", [observation], timestamp=0.0)
+
+    assert result.events == ()
+    assert result.snapshot.zone_for("secure").current_tracks == 0
+    assert result.snapshot.state_for("secure", 1) is IntrusionState.OUTSIDE
+
+
 def test_restricted_overlay_returns_an_annotated_copy() -> None:
     config = CameraRestrictedAreaConfig("cam-a", (101, 101), (_zone("secure", dwell=0),))
     detector = RestrictedAreaDetector((config,))

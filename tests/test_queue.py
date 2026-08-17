@@ -306,6 +306,30 @@ def test_queue_cli_is_disabled_until_explicitly_enabled() -> None:
     ).enable_restricted_area
 
 
+def test_foot_point_inside_but_bbox_mostly_outside_queue_does_not_qualify() -> None:
+    # Queue spans x in [20, 80]; this bbox straddles the right edge so only
+    # two-thirds of its area overlaps the queue, below the 0.75 requirement.
+    analyzer = _analyzer(_queue(dwell=0.0))
+    observation = TrackObservation(
+        camera_id="cam-a",
+        track_id=1,
+        timestamp=0.0,
+        frame_index=0,
+        xyxy=(76.0, 38.0, 82.0, 50.0),
+        foot_point=(79.0, 50.0),
+        detection_confidence=0.9,
+        confirmed=True,
+        trajectory=(),
+        smoothed_velocity=(0.0, 0.0),
+    )
+
+    result = analyzer.update("cam-a", [observation], timestamp=0.0)
+
+    assert result.events == ()
+    assert result.snapshot.queue_for("checkout").raw_count == 0
+    assert result.snapshot.state_for("checkout", 1) is None
+
+
 def test_overlay_uses_one_stable_color_per_queue_and_one_summary_line() -> None:
     left = _queue("left", left=0.05, right=0.45, dwell=0)
     right = _queue("right", left=0.55, right=0.95, dwell=0)

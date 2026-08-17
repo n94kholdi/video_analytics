@@ -11,7 +11,7 @@ from app.api.presets import APPLICATIONS, get_application
 def test_application_catalog_has_unique_ids() -> None:
     identifiers = [item.application_id for item in APPLICATIONS]
     assert len(identifiers) == len(set(identifiers))
-    assert {"people_counting", "heatmap", "vertical_queue"} <= set(identifiers)
+    assert {"people_counting", "heatmap", "vertical_queue", "configured_queue"} <= set(identifiers)
     assert all(item.metrics for item in APPLICATIONS)
     assert all(
         definition.display in {"card", "chart", "status", "counter", "table"}
@@ -22,7 +22,16 @@ def test_application_catalog_has_unique_ids() -> None:
 
 def test_configured_applications_declare_camera_config_requirement() -> None:
     assert get_application("restricted_area").requires_camera_config
+    assert get_application("configured_queue").requires_camera_config
     assert not get_application("people_counting").requires_camera_config
+
+
+def test_configured_queue_exposes_occupancy_and_speed_metrics() -> None:
+    keys = {item.key for item in get_application("configured_queue").metrics}
+
+    assert {"queue_length", "queue_speed", "queue_wait_seconds", "queue_details"} <= keys
+    assert "entry_count" not in keys
+    assert "exit_count" not in keys
 
 
 def test_restricted_area_exposes_lifecycle_counters() -> None:
@@ -69,6 +78,33 @@ def test_job_command_uses_existing_analytics_cli(tmp_path: Path) -> None:
     assert command[command.index("--max-frames") + 1] == "25"
     assert command[command.index("--processing-width") + 1] == "1280"
     assert command[command.index("--frame-stride") + 1] == "5"
+    assert expected["counts_csv"] == job_dir / "counts.csv"
+
+
+def test_configured_queue_command_uses_camera_geometry(tmp_path: Path) -> None:
+    manager = JobManager(tmp_path, python_executable="python-test")
+    job_dir = tmp_path / "job-queue"
+    job_dir.mkdir()
+    source = job_dir / "input.mp4"
+    source.touch()
+    camera_config = job_dir / "camera.yaml"
+    camera_config.write_text("camera: {id: camera, name: Camera, source: uploaded}\nanalytics: {enabled: [queue]}\n")
+    record = manager.register(
+        job_id="job-queue",
+        application_id="configured_queue",
+        original_filename="shop.mp4",
+        camera_id="test-camera",
+        input_video=source,
+        camera_config=camera_config,
+        max_frames=40,
+    )
+
+    command, expected = manager._build_command(record, get_application("configured_queue"))
+
+    assert command[:3] == ["python-test", "-m", "app.analytics.cli"]
+    assert command.count("--enable-queue") == 1
+    assert command[command.index("--queue-mode") + 1] == "configured"
+    assert command[command.index("--camera-config") + 1] == str(camera_config)
     assert expected["counts_csv"] == job_dir / "counts.csv"
 
 
