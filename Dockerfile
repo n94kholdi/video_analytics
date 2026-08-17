@@ -28,7 +28,7 @@ COPY app ./app
 COPY configs ./configs
 
 RUN useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/output/dashboard /app/output/outbox /app/outputs \
+    && mkdir -p /app/output/dashboard /app/output/outbox /app/output/virtual-cameras /app/outputs \
     && chown -R appuser:appuser /app/output /app/outputs
 
 USER appuser

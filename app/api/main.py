@@ -22,6 +22,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
+from app.api.virtual_cameras import (
+    manager as virtual_camera_manager,
+    router as virtual_camera_router,
+    validate_camera_id,
+)
 from app.core.config import DEFAULT_CAMERA_CONFIG_PATH, PROJECT_ROOT
 from app.geometry.config import load_camera_config
 from app.management.api import rollup_worker, router as management_router
@@ -56,12 +61,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(management_router)
+app.include_router(virtual_camera_router)
 
 
 @app.on_event("startup")
 async def start_analytics_store() -> None:
     analytics_repository.open()
     app.state.analytics_rollup_task = asyncio.create_task(rollup_worker())
+    virtual_camera_manager.load_existing()
 
 
 @app.on_event("shutdown")
@@ -70,6 +77,7 @@ async def stop_analytics_store() -> None:
     if task is not None:
         task.cancel()
     analytics_repository.close()
+    virtual_camera_manager.stop_all()
 
 
 class StreamJobRequest(BaseModel):
@@ -96,13 +104,7 @@ class StreamJobRequest(BaseModel):
     @field_validator("camera_id")
     @classmethod
     def validate_camera_id(cls, value: str) -> str:
-        candidate = value.strip()
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", candidate):
-            raise ValueError(
-                "camera_id must use 1-100 letters, digits, dots, underscores, or hyphens"
-            )
-        return candidate
-        return candidate
+        return validate_camera_id(value)
 
 
 @app.get("/health")
@@ -249,12 +251,10 @@ async def create_job(
         raise HTTPException(status_code=422, detail="max_frames must be positive")
     if enable_reid and preset.module == "app.detection.cli":
         raise HTTPException(status_code=422, detail="ReID is only available for tracking jobs")
-    camera_id = camera_id.strip()
-    if not camera_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", camera_id):
-        raise HTTPException(
-            status_code=422,
-            detail="camera_id must use 1-100 letters, digits, dots, underscores, or hyphens",
-        )
+    try:
+        camera_id = validate_camera_id(camera_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     video_suffix = Path(video.filename or "").suffix.lower()
     if video_suffix not in ALLOWED_VIDEO_SUFFIXES:
         raise HTTPException(status_code=422, detail="unsupported recorded-video file type")
