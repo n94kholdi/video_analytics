@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import json
 from pathlib import Path
 import re
 import shutil
 import asyncio
+import tempfile
 import time
 from typing import Annotated, Iterator
 from uuid import uuid4
 
+import cv2
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -174,6 +177,59 @@ def job_preview_stream(job_id: str) -> StreamingResponse:
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/v1/frames/first")
+async def extract_first_frame(video: Annotated[UploadFile, File(...)]) -> dict[str, object]:
+    """Decode the first frame of an uploaded video with OpenCV.
+
+    Used as a fallback when the browser's <video> element cannot preview a
+    file it will nonetheless accept for processing (e.g. some codecs inside
+    an otherwise-supported container).
+    """
+
+    video_suffix = Path(video.filename or "").suffix.lower()
+    if video_suffix not in ALLOWED_VIDEO_SUFFIXES:
+        raise HTTPException(status_code=422, detail="unsupported video file type")
+
+    JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(dir=JOBS_ROOT) as scratch_dir:
+            scratch_path = Path(scratch_dir) / f"source{video_suffix}"
+            try:
+                await _save_upload(video, scratch_path, limit=MAX_UPLOAD_BYTES)
+            finally:
+                await video.close()
+
+            capture = cv2.VideoCapture(str(scratch_path))
+            try:
+                if not capture.isOpened():
+                    raise HTTPException(status_code=422, detail="could not open video file")
+                ok, frame = capture.read()
+            finally:
+                capture.release()
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail=f"could not read video file: {exc}") from exc
+
+    if not ok or frame is None:
+        raise HTTPException(status_code=422, detail="could not read the first frame of this video")
+
+    height, width = frame.shape[:2]
+    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to encode frame")
+
+    data_url = "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
+    return {
+        "data": {
+            "data_url": data_url,
+            "width": width,
+            "height": height,
+            "aspect_ratio": width / height,
+        }
+    }
 
 
 @app.post("/api/v1/jobs", status_code=202)
