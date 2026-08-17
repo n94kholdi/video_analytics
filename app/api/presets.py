@@ -45,13 +45,8 @@ PROCESSING_METRICS = (
 )
 TRACKING_METRICS = (
     MetricDefinition("current_people", "Current people", display="counter"),
-    MetricDefinition("total_unique_people", "Total unique people", aggregation="total", display="counter"),
-    MetricDefinition("active_tracks", "Active tracks", display="status"),
-    MetricDefinition("lost_tracks", "Lost tracks", aggregation="total", display="counter"),
 ) + PROCESSING_METRICS
 COUNTING_METRICS = TRACKING_METRICS + (
-    MetricDefinition("entry_count", "Entries", aggregation="total", display="counter"),
-    MetricDefinition("exit_count", "Exits", aggregation="total", display="counter"),
     MetricDefinition("zone_occupancy", "Area occupancy", value_type="table", display="table"),
 )
 RESTRICTED_METRICS = (
