@@ -43,10 +43,6 @@ PROCESSING_METRICS = (
     MetricDefinition("progress", "Progress", unit="%", display="status", availability="live"),
     MetricDefinition("elapsed_seconds", "Elapsed time", unit="s", display="counter"),
 )
-DETECTION_METRICS = (
-    MetricDefinition("current_people", "Current people", display="counter"),
-    MetricDefinition("total_detections", "Total detections", aggregation="total", display="counter"),
-) + PROCESSING_METRICS
 TRACKING_METRICS = (
     MetricDefinition("current_people", "Current people", display="counter"),
     MetricDefinition("total_unique_people", "Total unique people", aggregation="total", display="counter"),
@@ -81,13 +77,6 @@ HEATMAP_METRICS = COUNTING_METRICS + (CROWDED_REGION_METRIC,)
 
 
 APPLICATIONS = (
-    ApplicationPreset(
-        "detection",
-        "Human detection",
-        "Detect people and draw bounding boxes.",
-        "app.detection.cli",
-        metrics=DETECTION_METRICS,
-    ),
     ApplicationPreset(
         "tracking",
         "People tracking",
@@ -126,38 +115,6 @@ APPLICATIONS = (
         "app.analytics.cli",
         ("--enable-queue", "--queue-mode", "vertical"),
         metrics=QUEUE_METRICS,
-    ),
-    ApplicationPreset(
-        "configured_queue",
-        "Detected people queue",
-        "Measure queue length, overflow, waiting time, and progress in configured polygons.",
-        "app.analytics.cli",
-        ("--enable-queue", "--queue-mode", "configured"),
-        True,
-        QUEUE_METRICS,
-    ),
-    ApplicationPreset(
-        "full_analytics",
-        "Combined configured analytics",
-        "Run counting, restricted areas, heatmaps, configured queues, and speed together.",
-        "app.analytics.cli",
-        (
-            "--enable-restricted-area",
-            "--enable-heatmap",
-            "--enable-queue",
-            "--queue-mode",
-            "configured",
-        ),
-        True,
-        COUNTING_METRICS
-        + RESTRICTED_METRICS
-        + tuple(
-            metric
-            for metric in QUEUE_METRICS
-            if metric.key.startswith("queue_")
-            or metric.key == "average_person_speed"
-        )
-        + (CROWDED_REGION_METRIC,),
     ),
 )
 

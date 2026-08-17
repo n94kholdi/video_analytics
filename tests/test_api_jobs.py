@@ -11,9 +11,7 @@ from app.api.presets import APPLICATIONS, get_application
 def test_application_catalog_has_unique_ids() -> None:
     identifiers = [item.application_id for item in APPLICATIONS]
     assert len(identifiers) == len(set(identifiers))
-    assert {"detection", "people_counting", "heatmap", "vertical_queue"} <= set(
-        identifiers
-    )
+    assert {"people_counting", "heatmap", "vertical_queue"} <= set(identifiers)
     assert all(item.metrics for item in APPLICATIONS)
     assert all(
         definition.display in {"card", "chart", "status", "counter", "table"}
@@ -24,8 +22,6 @@ def test_application_catalog_has_unique_ids() -> None:
 
 def test_configured_applications_declare_camera_config_requirement() -> None:
     assert get_application("restricted_area").requires_camera_config
-    assert get_application("configured_queue").requires_camera_config
-    assert get_application("full_analytics").requires_camera_config
     assert not get_application("people_counting").requires_camera_config
 
 
@@ -42,20 +38,11 @@ def test_restricted_area_exposes_lifecycle_counters() -> None:
     assert "exit_count" not in keys
 
 
-def test_configured_queue_exposes_people_speed_and_per_queue_details() -> None:
-    keys = {item.key for item in get_application("configured_queue").metrics}
-
-    assert {"queue_length", "queue_speed", "queue_details"} <= keys
-
-
 def test_heatmap_applications_expose_top_crowded_regions_metric() -> None:
-    for application_id in ("heatmap", "full_analytics"):
-        metrics = get_application(application_id).metrics
-        definition = next(
-            item for item in metrics if item.key == "top_crowded_regions"
-        )
-        assert definition.value_type == "table"
-        assert definition.display == "table"
+    metrics = get_application("heatmap").metrics
+    definition = next(item for item in metrics if item.key == "top_crowded_regions")
+    assert definition.value_type == "table"
+    assert definition.display == "table"
 
 
 def test_job_command_uses_existing_analytics_cli(tmp_path: Path) -> None:
@@ -83,28 +70,6 @@ def test_job_command_uses_existing_analytics_cli(tmp_path: Path) -> None:
     assert command[command.index("--processing-width") + 1] == "1280"
     assert command[command.index("--frame-stride") + 1] == "5"
     assert expected["counts_csv"] == job_dir / "counts.csv"
-
-
-def test_detection_command_receives_supported_max_frames(tmp_path: Path) -> None:
-    manager = JobManager(tmp_path)
-    job_dir = tmp_path / "job-2"
-    job_dir.mkdir()
-    source = job_dir / "input.mp4"
-    source.touch()
-    record = manager.register(
-        job_id="job-2",
-        application_id="detection",
-        original_filename="shop.mp4",
-        camera_id="test-camera",
-        input_video=source,
-        camera_config=None,
-        max_frames=10,
-    )
-
-    command, _ = manager._build_command(record, get_application("detection"))
-
-    assert command[command.index("--max-frames") + 1] == "10"
-    assert "--camera-id" not in command
 
 
 def test_stream_job_passes_rtsp_url_to_existing_pipeline(tmp_path: Path) -> None:

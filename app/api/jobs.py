@@ -236,7 +236,16 @@ class JobManager:
         data.pop("job_directory")
         data.pop("input_video")
         data.pop("camera_config")
-        data["application"] = get_application(record.application_id).public_dict()
+        try:
+            data["application"] = get_application(record.application_id).public_dict()
+        except ValueError:
+            data["application"] = {
+                "id": record.application_id,
+                "name": record.application_id,
+                "description": "This application preset is no longer available.",
+                "requires_camera_config": False,
+                "metric_schema": [],
+            }
         state_path = Path(record.job_directory) / "live_state.json"
         data["live"] = _read_json(state_path)
         data["preview_url"] = (
