@@ -97,6 +97,8 @@ class FleetSupervisor:
                     continue
                 if existing is not None:
                     existing.stop()
+                    if existing.is_alive():
+                        continue
                 if self._detector is None:
                     continue
                 worker = self._worker_factory(camera, self.settings, self._detector, self._detector_lock)

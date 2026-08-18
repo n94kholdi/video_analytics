@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 import logging
+import os
 from threading import Event, Lock, Thread
+from time import monotonic
 from typing import Callable
 
 import cv2
 
 from app.fleet.catalog import FleetCamera
 from app.fleet.pipeline import CameraPipeline, PersonDetector
-from app.fleet.sampler import SampleInterval
 from app.fleet.settings import FleetSettings
 
 logger = logging.getLogger(__name__)
 
 CaptureFactory = Callable[[str], cv2.VideoCapture]
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 
 def open_capture(stream_url: str) -> cv2.VideoCapture:
-    capture = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+    capture = cv2.VideoCapture(stream_url)
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return capture
 
@@ -42,6 +44,8 @@ class CameraWorker:
         self.status = "starting"
         self.last_error: str | None = None
         self.processed_frames = 0
+        self.last_metrics: dict[str, object] | None = None
+        self._last_processed = 0.0
         self._detector = detector
         self._detector_lock = detector_lock
         self._capture_factory = capture_factory
@@ -64,7 +68,10 @@ class CameraWorker:
         )
         self._thread.start()
 
-    def stop(self, timeout: float = 3.0) -> None:
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def stop(self, timeout: float = 8.0) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
@@ -79,6 +86,8 @@ class CameraWorker:
             "fieldId": self.camera.field_id,
             "status": self.status,
             "processedFrames": self.processed_frames,
+            "currentPeople": self.last_metrics.get("current_people") if self.last_metrics else None,
+            "queueLength": self.last_metrics.get("queue_length") if self.last_metrics else None,
             "lastError": self.last_error,
         }
 
@@ -87,7 +96,6 @@ class CameraWorker:
             self.camera, self.settings, self._detector, self._detector_lock
         )
         self._pipeline = pipeline
-        gate = SampleInterval(self.settings.interval_seconds)
         capture: cv2.VideoCapture | None = None
         try:
             while not self._stop.is_set():
@@ -97,23 +105,22 @@ class CameraWorker:
                         self.status = "reconnect"
                         self._stop.wait(self.settings.reconnect_seconds)
                         continue
-                grabbed = capture.grab()
-                if not grabbed:
+                remaining = self.settings.interval_seconds - (monotonic() - self._last_processed)
+                if remaining > 0:
+                    capture.grab()
+                    self._stop.wait(min(0.05, remaining))
+                    continue
+                ok, frame = capture.read()
+                if not ok or frame is None or getattr(frame, "size", 0) == 0:
                     self.last_error = "lost camera stream"
                     capture.release()
                     capture = None
                     self.status = "reconnect"
                     continue
-                if not gate.due():
-                    self._stop.wait(0.05)
-                    continue
-                ok, frame = capture.retrieve()
-                if not ok or frame is None or getattr(frame, "size", 0) == 0:
-                    self.last_error = "empty camera frame"
-                    continue
                 try:
-                    pipeline.process(frame)
+                    self.last_metrics = pipeline.process(frame)
                     self.processed_frames = pipeline.processed_frames
+                    self._last_processed = monotonic()
                     self.status = "running"
                     self.last_error = None
                 except Exception as exc:  # noqa: BLE001 - keep the worker alive

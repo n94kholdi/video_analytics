@@ -53,6 +53,7 @@ class FleetSettings:
     database_url: str | None
     mediamtx_rtsp_url: str | None
     expected_samples_per_minute: int
+    spatial_publish_seconds: float
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str] | None = None) -> "FleetSettings":
@@ -82,4 +83,7 @@ class FleetSettings:
             ),
             mediamtx_rtsp_url=environment.get("MEDIAMTX_RTSP_URL") or None,
             expected_samples_per_minute=max(1, round(fps * 60.0)),
+            spatial_publish_seconds=_positive_float(
+                environment.get("VIDEO_ANALYTICS_SPATIAL_PUBLISH_SECONDS"), 30.0
+            ),
         )

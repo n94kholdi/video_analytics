@@ -56,7 +56,7 @@ class CameraPipeline:
         self._started = monotonic()
         self.processed_frames = 0
         self.restricted_violations = 0
-        self._last_spatial_publish = 0.0
+        self._last_spatial_publish: float | None = None
         self._closed = False
 
     def close(self) -> None:
@@ -105,7 +105,10 @@ class CameraPipeline:
             self.restricted_violations += sum(
                 event.event_type == "restricted_area_confirmed" for event in intrusion.events
             )
-        include_spatial = sample_time - self._last_spatial_publish >= 900.0
+        include_spatial = (
+            self._last_spatial_publish is None
+            or sample_time - self._last_spatial_publish >= self.settings.spatial_publish_seconds
+        )
         if include_spatial:
             self._last_spatial_publish = sample_time
         snapshot = counted.snapshot
@@ -120,7 +123,7 @@ class CameraPipeline:
             restricted_violations=self.restricted_violations,
             queue_statuses=queue_result.snapshot.queues if queue_result is not None else (),
             crowded=heatmap_snapshot.top_crowded_regions,
-            ground=heatmap_snapshot.ground,
+            ground=heatmap_snapshot.ground or heatmap_snapshot.image,
             include_spatial_layers=include_spatial,
             processing_fps=self.processed_frames / elapsed,
             frame_count=self.processed_frames,

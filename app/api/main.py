@@ -69,7 +69,7 @@ app.include_router(management_router)
 async def start_analytics_store() -> None:
     analytics_repository.open()
     app.state.analytics_rollup_task = asyncio.create_task(rollup_worker())
-    fleet_supervisor.start()
+    app.state.fleet_task = asyncio.create_task(asyncio.to_thread(fleet_supervisor.start))
 
 
 @app.on_event("shutdown")

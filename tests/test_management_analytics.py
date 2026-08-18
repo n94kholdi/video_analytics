@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -11,7 +12,12 @@ from app.management.publisher import MinutePublisher
 from app.management.service import _difference_points, _shift_month
 
 
-def test_camera_minute_accepts_camel_case_and_requires_timezone() -> None:
+def test_camera_minute_accepts_live_job_sample_counts() -> None:
+    value = CameraMinute.model_validate({
+        "cameraId": "camera-1", "bucketStart": "2026-08-11T12:00:00Z",
+        "sampleCount": 179, "expectedSamples": 30, "confidenceSum": 179.0,
+    })
+    assert value.sample_count == 179
     value = CameraMinute.model_validate({
         "cameraId": "camera-1", "bucketStart": "2026-08-11T12:00:00Z",
         "sampleCount": 30, "expectedSamples": 30,
@@ -65,3 +71,22 @@ def test_publisher_is_zero_cost_when_ingestion_is_disabled(monkeypatch, tmp_path
     publisher.observe({"current_people": 5})
     publisher.close()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_publisher_snapshots_the_current_minute_without_waiting_for_clock_roll(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("VIDEO_ANALYTICS_INGEST_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("ANALYTICS_OUTBOX_DIR", str(tmp_path))
+    monkeypatch.setenv("ANALYTICS_PUBLISH_INTERVAL_SECONDS", "0")
+    publisher = MinutePublisher("camera-1", "Cam")
+    try:
+        publisher.observe({"current_people": 1})
+        publisher.observe({"current_people": 4})
+        files = list((tmp_path / "camera-1").glob("*.json"))
+        assert len(files) == 1
+        payload = json.loads(files[0].read_text(encoding="utf-8"))
+        observation = payload["observations"][0]
+        assert observation["sampleCount"] == 2
+        assert observation["occupancyLast"] == 4
+        assert observation["occupancyMax"] == 4
+    finally:
+        publisher.close()

@@ -37,6 +37,9 @@ class FakeWorker:
     def stop(self, timeout: float = 3.0) -> None:
         self.stopped = True
 
+    def is_alive(self) -> bool:
+        return self.started and not self.stopped
+
     def snapshot(self) -> dict[str, object]:
         return {
             "cameraId": self.camera.camera_id,
@@ -74,6 +77,7 @@ def test_fleet_fps_is_one_frame_every_two_seconds() -> None:
     assert settings.fps == 0.5
     assert settings.interval_seconds == 2.0
     assert settings.expected_samples_per_minute == 30
+    assert settings.spatial_publish_seconds == 30.0
 
 
 def test_sample_interval_emits_once_per_two_seconds_and_does_not_catch_up() -> None:
@@ -165,6 +169,7 @@ def test_pipeline_processes_one_empty_frame_without_writing_job_artifacts(tmp_pa
     assert metrics["frame_count"] == 1
     assert metrics["current_people"] == 0
     assert metrics["processing_fps"] is not None
+    assert metrics["management_spatial_layers"] is not None
     assert list(tmp_path.iterdir()) == []
 
 
