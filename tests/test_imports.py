@@ -16,7 +16,7 @@ import pytest
         "app.analytics",
         "app.storage",
         "app.api",
-        "app.dashboard",
+        "app.management",
     ],
 )
 def test_package_imports(package: str) -> None:
