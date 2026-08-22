@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 from app.core.config import AppSettings
 from app.tracking.base import BaseTracker
 from app.tracking.bytetrack import ByteTrackAdapter
+from app.tracking.deepocsort_adapter import DeepOCSortAdapter
 from app.tracking.stabletrack_adapter import StableTrackAdapter
 
 
@@ -38,6 +39,13 @@ TRACKER_REGISTRY: dict[str, TrackerSpec] = {
         "StableTrack",
         "Low-frequency association (BBD + optional ReID) for 0.5 FPS processing.",
         StableTrackAdapter,
+        requires_reid=False,
+    ),
+    "deepocsort": TrackerSpec(
+        "deepocsort",
+        "Deep OC-SORT",
+        "Observation-centric motion plus adaptive appearance association.",
+        DeepOCSortAdapter,
         requires_reid=False,
     ),
 }
@@ -99,6 +107,12 @@ def _default_kwargs(settings: AppSettings | None) -> dict[str, Any]:
         "reid_low_threshold": settings.tracker_reid_low_threshold,
         "max_age_seconds": settings.tracker_max_age_seconds,
         "use_visual_tracking": settings.tracker_use_visual_tracking,
+        "inertia": settings.tracker_inertia,
+        "w_association_emb": settings.tracker_w_association_emb,
+        "alpha_fixed_emb": settings.tracker_alpha_fixed_emb,
+        "aw_param": settings.tracker_aw_param,
+        "delta_t_seconds": settings.tracker_delta_t_seconds,
+        "use_cmc": settings.tracker_use_cmc,
     }
 
 

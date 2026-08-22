@@ -65,12 +65,14 @@ Tracking is separated into:
 - `app.tracking.factory`: configuration-based construction (`tracker.type` in YAML)
 - `app.tracking.bytetrack`: ByteTrack baseline adapter (unchanged production behavior)
 - `app.tracking.stabletrack_adapter`: StableTrack adapter for 0.5 FPS / 2 s gaps
+- `app.tracking.deepocsort_adapter`: Deep OC-SORT adapter (OCM + Adaptive Weighting)
 - `app.tracking.third_party.stabletrack`: isolated paper implementation (no official repo)
+- `app.tracking.third_party.deepocsort`: isolated Deep OC-SORT backend (MIT, official algorithm)
 - `app.tracking.benchmark`: cached-detection HOTA/IDF1/MOTA runner
 - `app.tracking.visualization`: track IDs, state, foot points, and trajectories
 - `app.tracking.cli`: recorded-video detector/tracker runner using source times
 
-Select a tracker with `tracker.type: bytetrack|stabletrack`, `--tracker`, or the
+Select a tracker with `tracker.type: bytetrack|stabletrack|deepocsort`, `--tracker`, or the
 temporary dashboard selector. `GET /api/v1/trackers` lists registered types so
 future adapters do not require a dashboard rebuild.
 

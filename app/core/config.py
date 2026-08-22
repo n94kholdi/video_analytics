@@ -15,7 +15,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "configs" / "cameras" / "example_lobby.yaml"
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
 _ALLOWED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
-_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack"})
+_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack", "deepocsort"})
 
 
 class ConfigError(ValueError):
@@ -45,6 +45,12 @@ class AppSettings:
     tracker_reid_low_threshold: float = 0.3
     tracker_max_age_seconds: float | None = None
     tracker_use_visual_tracking: bool = True
+    tracker_inertia: float = 0.2
+    tracker_w_association_emb: float = 0.75
+    tracker_alpha_fixed_emb: float = 0.95
+    tracker_aw_param: float = 0.5
+    tracker_delta_t_seconds: float = 2.0
+    tracker_use_cmc: bool = False
     detector_model: Path | None = None
     reid_model: Path | None = None
 
@@ -166,6 +172,21 @@ class AppSettings:
             tracker.get("use_visual_tracking", True),
             "tracker.use_visual_tracking",
         )
+        tracker_inertia = _threshold(tracker.get("inertia", 0.2), "tracker.inertia")
+        tracker_w_association_emb = _positive_float(
+            tracker.get("w_association_emb", 0.75),
+            "tracker.w_association_emb",
+        )
+        tracker_alpha_fixed_emb = _threshold(
+            tracker.get("alpha_fixed_emb", 0.95),
+            "tracker.alpha_fixed_emb",
+        )
+        tracker_aw_param = _threshold(tracker.get("aw_param", 0.5), "tracker.aw_param")
+        tracker_delta_t_seconds = _positive_float(
+            tracker.get("delta_t_seconds", 2.0),
+            "tracker.delta_t_seconds",
+        )
+        tracker_use_cmc = _boolean(tracker.get("use_cmc", False), "tracker.use_cmc")
 
         return cls(
             name=name,
@@ -187,6 +208,12 @@ class AppSettings:
             tracker_reid_low_threshold=tracker_reid_low_threshold,
             tracker_max_age_seconds=tracker_max_age_seconds,
             tracker_use_visual_tracking=tracker_use_visual_tracking,
+            tracker_inertia=tracker_inertia,
+            tracker_w_association_emb=tracker_w_association_emb,
+            tracker_alpha_fixed_emb=tracker_alpha_fixed_emb,
+            tracker_aw_param=tracker_aw_param,
+            tracker_delta_t_seconds=tracker_delta_t_seconds,
+            tracker_use_cmc=tracker_use_cmc,
             detector_model=detector_model,
             reid_model=reid_model,
         )

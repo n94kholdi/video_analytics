@@ -15,7 +15,7 @@ def person(x: float, *, confidence: float = 0.9) -> Detection:
 
 def test_factory_initializes_registered_trackers() -> None:
     catalog = {item["type"] for item in public_tracker_catalog()}
-    assert catalog == {"bytetrack", "stabletrack"}
+    assert catalog == {"bytetrack", "stabletrack", "deepocsort"}
     for tracker_type in available_tracker_types():
         tracker = create_tracker(tracker_type, frame_rate=0.5)
         assert isinstance(tracker, BaseTracker)
@@ -24,7 +24,7 @@ def test_factory_initializes_registered_trackers() -> None:
 
 def test_factory_rejects_unknown_tracker_type() -> None:
     with pytest.raises(ValueError, match="unknown tracker type"):
-        create_tracker("deepocsort")
+        create_tracker("not-a-tracker")
 
 
 def test_switching_trackers_does_not_share_state() -> None:
@@ -43,7 +43,7 @@ def test_switching_trackers_does_not_share_state() -> None:
     assert second_next.tracker_name == "stabletrack"
 
 
-@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack"])
+@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack", "deepocsort"])
 def test_reset_clears_ids_and_allows_frame_index_restart(tracker_type: str) -> None:
     tracker = create_tracker(tracker_type, frame_rate=0.5, confirmation_frames=1)
     tracker.update([person(0.0)], camera_id="cam", timestamp=1.0, frame_index=10)
@@ -54,7 +54,7 @@ def test_reset_clears_ids_and_allows_frame_index_restart(tracker_type: str) -> N
     assert tracker.retained_track_count == 1
 
 
-@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack"])
+@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack", "deepocsort"])
 def test_empty_detections_do_not_fabricate_observations(tracker_type: str) -> None:
     tracker = create_tracker(tracker_type, frame_rate=0.5, confirmation_frames=1, lost_track_buffer=4)
     tracker.update([person(0.0)], camera_id="cam", timestamp=0.0, frame_index=0)
@@ -65,7 +65,7 @@ def test_empty_detections_do_not_fabricate_observations(tracker_type: str) -> No
     assert all(hasattr(empty, field) for field in ("observations", "expired_track_ids", "tracking_ms"))
 
 
-@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack"])
+@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack", "deepocsort"])
 def test_outputs_are_normalized(tracker_type: str) -> None:
     tracker = create_tracker(tracker_type, frame_rate=0.5, confirmation_frames=1)
     result = tracker.update([person(5.0, confidence=0.82)], camera_id="cam", timestamp=0.0, frame_index=0)
@@ -82,7 +82,7 @@ def test_outputs_are_normalized(tracker_type: str) -> None:
     assert result.tracker_name == tracker_type
 
 
-@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack"])
+@pytest.mark.parametrize("tracker_type", ["bytetrack", "stabletrack", "deepocsort"])
 def test_half_fps_timestamp_gap_keeps_identity(tracker_type: str) -> None:
     tracker = create_tracker(
         tracker_type,

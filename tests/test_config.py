@@ -61,6 +61,10 @@ def test_default_configuration_loads() -> None:
     assert settings.tracker_history_size == 90
     assert settings.tracker_type == "bytetrack"
     assert settings.tracker_bbd_threshold == 16.0
+    assert settings.tracker_inertia == 0.2
+    assert settings.tracker_w_association_emb == 0.75
+    assert settings.tracker_delta_t_seconds == 2.0
+    assert settings.tracker_use_cmc is False
     assert settings.output_dir == PROJECT_ROOT / "outputs"
 
 
@@ -71,7 +75,8 @@ def test_relative_paths_resolve_from_project_root() -> None:
     assert settings.database_path == PROJECT_ROOT / "outputs" / "test.sqlite3"
 
 
-def test_environment_overrides_are_validated() -> None:
+@pytest.mark.parametrize("tracker_name", ["stabletrack", "deepocsort"])
+def test_environment_overrides_are_validated(tracker_name: str) -> None:
     settings = load_settings(
         environ={
             "VIDEO_ANALYTICS_LOG_LEVEL": "debug",
@@ -80,7 +85,7 @@ def test_environment_overrides_are_validated() -> None:
             ),
             "VIDEO_ANALYTICS_CONFIDENCE_THRESHOLD": "0.55",
             "VIDEO_ANALYTICS_IOU_THRESHOLD": "0.60",
-            "VIDEO_ANALYTICS_TRACKER": "stabletrack",
+            "VIDEO_ANALYTICS_TRACKER": tracker_name,
         }
     )
 
@@ -91,7 +96,7 @@ def test_environment_overrides_are_validated() -> None:
     )
     assert settings.detector_confidence_threshold == 0.55
     assert settings.detector_iou_threshold == 0.60
-    assert settings.tracker_type == "stabletrack"
+    assert settings.tracker_type == tracker_name
 
 
 @pytest.mark.parametrize(

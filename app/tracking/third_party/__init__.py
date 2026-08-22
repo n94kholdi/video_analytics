@@ -1,11 +1,6 @@
-"""Isolated StableTrack implementation (paper-faithful, no official public code).
+"""Isolated third-party tracker backends.
 
-StableTrack: Stabilizing Multi-Object Tracking on Low-Frequency Detections
-Shelukhan, Mamedov, Kvanchiani. arXiv:2511.20418. No public license or
-repository was released with the paper; this package is an independent
-reference implementation kept separate from application adapters.
+StableTrack has no official public repository. Deep OC-SORT is extracted from
+https://github.com/GerardMaggiolino/Deep-OC-SORT (MIT). Adapters live outside
+this package.
 """
-
-from app.tracking.third_party.stabletrack.tracker import StableTrack, StableTrackConfig, TrackState
-
-__all__ = ["StableTrack", "StableTrackConfig", "TrackState"]
