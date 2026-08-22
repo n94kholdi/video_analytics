@@ -59,6 +59,8 @@ def test_default_configuration_loads() -> None:
     assert settings.tracker_lost_track_buffer == 30
     assert settings.tracker_match_threshold == 0.3
     assert settings.tracker_history_size == 90
+    assert settings.tracker_type == "bytetrack"
+    assert settings.tracker_bbd_threshold == 16.0
     assert settings.output_dir == PROJECT_ROOT / "outputs"
 
 
@@ -78,6 +80,7 @@ def test_environment_overrides_are_validated() -> None:
             ),
             "VIDEO_ANALYTICS_CONFIDENCE_THRESHOLD": "0.55",
             "VIDEO_ANALYTICS_IOU_THRESHOLD": "0.60",
+            "VIDEO_ANALYTICS_TRACKER": "stabletrack",
         }
     )
 
@@ -88,6 +91,7 @@ def test_environment_overrides_are_validated() -> None:
     )
     assert settings.detector_confidence_threshold == 0.55
     assert settings.detector_iou_threshold == 0.60
+    assert settings.tracker_type == "stabletrack"
 
 
 @pytest.mark.parametrize(
@@ -109,6 +113,7 @@ def test_environment_overrides_are_validated() -> None:
         ("tracker", "lost_track_buffer", 0, "tracker.lost_track_buffer"),
         ("tracker", "match_threshold", -0.1, "tracker.match_threshold"),
         ("tracker", "history_size", 0, "tracker.history_size"),
+        ("tracker", "type", "unknown", "tracker.type"),
     ],
 )
 def test_invalid_configuration_is_rejected(

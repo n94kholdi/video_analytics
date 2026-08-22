@@ -15,6 +15,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "configs" / "cameras" / "example_lobby.yaml"
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
 _ALLOWED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack"})
 
 
 class ConfigError(ValueError):
@@ -37,6 +38,13 @@ class AppSettings:
     tracker_lost_track_buffer: int
     tracker_match_threshold: float
     tracker_history_size: int
+    tracker_type: str = "bytetrack"
+    tracker_bbd_threshold: float = 16.0
+    tracker_stable_iou_threshold: float = 0.4
+    tracker_reid_high_threshold: float = 0.65
+    tracker_reid_low_threshold: float = 0.3
+    tracker_max_age_seconds: float | None = None
+    tracker_use_visual_tracking: bool = True
     detector_model: Path | None = None
     reid_model: Path | None = None
 
@@ -128,6 +136,36 @@ class AppSettings:
             tracker.get("history_size"),
             "tracker.history_size",
         )
+        tracker_type = str(tracker.get("type") or "bytetrack").strip().lower()
+        if tracker_type not in _ALLOWED_TRACKERS:
+            allowed = ", ".join(sorted(_ALLOWED_TRACKERS))
+            raise ConfigError(f"tracker.type must be one of: {allowed}")
+        tracker_bbd_threshold = _positive_float(
+            tracker.get("bbd_threshold", 16.0),
+            "tracker.bbd_threshold",
+        )
+        tracker_stable_iou_threshold = _threshold(
+            tracker.get("iou_threshold", 0.4),
+            "tracker.iou_threshold",
+        )
+        tracker_reid_high_threshold = _threshold(
+            tracker.get("reid_high_threshold", 0.65),
+            "tracker.reid_high_threshold",
+        )
+        tracker_reid_low_threshold = _threshold(
+            tracker.get("reid_low_threshold", 0.3),
+            "tracker.reid_low_threshold",
+        )
+        max_age_value = tracker.get("max_age_seconds")
+        tracker_max_age_seconds = (
+            None
+            if max_age_value is None
+            else _positive_float(max_age_value, "tracker.max_age_seconds")
+        )
+        tracker_use_visual_tracking = _boolean(
+            tracker.get("use_visual_tracking", True),
+            "tracker.use_visual_tracking",
+        )
 
         return cls(
             name=name,
@@ -142,6 +180,13 @@ class AppSettings:
             tracker_lost_track_buffer=tracker_lost_track_buffer,
             tracker_match_threshold=tracker_match_threshold,
             tracker_history_size=tracker_history_size,
+            tracker_type=tracker_type,
+            tracker_bbd_threshold=tracker_bbd_threshold,
+            tracker_stable_iou_threshold=tracker_stable_iou_threshold,
+            tracker_reid_high_threshold=tracker_reid_high_threshold,
+            tracker_reid_low_threshold=tracker_reid_low_threshold,
+            tracker_max_age_seconds=tracker_max_age_seconds,
+            tracker_use_visual_tracking=tracker_use_visual_tracking,
             detector_model=detector_model,
             reid_model=reid_model,
         )
@@ -231,6 +276,13 @@ def _apply_environment_overrides(
         if value := environment.get(variable):
             updates[field_name] = _threshold(value, variable, label=label)
 
+    if value := environment.get("VIDEO_ANALYTICS_TRACKER"):
+        tracker_type = value.strip().lower()
+        if tracker_type not in _ALLOWED_TRACKERS:
+            allowed = ", ".join(sorted(_ALLOWED_TRACKERS))
+            raise ConfigError(f"VIDEO_ANALYTICS_TRACKER must be one of: {allowed}")
+        updates["tracker_type"] = tracker_type
+
     return replace(settings, **updates) if updates else settings
 
 
@@ -261,6 +313,24 @@ def _positive_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"{field_name} must be a positive integer")
     return value
+
+
+def _positive_float(value: Any, field_name: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{field_name} must be a positive number") from exc
+    if not result > 0:
+        raise ConfigError(f"{field_name} must be a positive number")
+    return result
+
+
+def _boolean(value: Any, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in {"true", "false", "1", "0", "yes", "no"}:
+        return value.strip().lower() in {"true", "1", "yes"}
+    raise ConfigError(f"{field_name} must be a boolean")
 
 
 def _resolve_path(value: str, base_dir: Path) -> Path:

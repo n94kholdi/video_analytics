@@ -21,7 +21,8 @@ from app.fleet.metrics import collect_events, live_metrics
 from app.fleet.settings import FleetSettings
 from app.geometry.config import CameraConfig
 from app.management.publisher import MinutePublisher
-from app.tracking.bytetrack import ByteTrackAdapter
+from app.tracking.base import BaseTracker
+from app.tracking.factory import create_tracker
 
 
 class PersonDetector(Protocol):
@@ -46,7 +47,7 @@ class CameraPipeline:
         self._detector_lock = detector_lock
         self._config = build_camera_config(camera, settings)
         self._publisher = publisher or MinutePublisher(camera.camera_id, camera.name)
-        self._tracker: ByteTrackAdapter | None = None
+        self._tracker: BaseTracker | None = None
         self._counter: PeopleCounter | None = None
         self._restricted: RestrictedAreaDetector | None = None
         self._queues: QueueAnalyzer | None = None
@@ -127,6 +128,7 @@ class CameraPipeline:
             include_spatial_layers=include_spatial,
             processing_fps=self.processed_frames / elapsed,
             frame_count=self.processed_frames,
+            active_tracker=self._tracker.name,
         )
         metrics["last_frame_ms"] = (monotonic() - started) * 1000.0
         self._publisher.observe(
@@ -147,7 +149,8 @@ class CameraPipeline:
         restricted_config = CameraRestrictedAreaConfig.from_camera_config(config, frame_size)
         queue_config = CameraQueueConfig.from_camera_config(config, frame_size)
         lost_track_buffer = max(3, round(8.0 * self.settings.fps))
-        self._tracker = ByteTrackAdapter(
+        self._tracker = create_tracker(
+            self.settings.tracker_type,
             lost_track_buffer=lost_track_buffer,
             history_size=max(16, lost_track_buffer * 4),
             frame_rate=self.settings.fps,

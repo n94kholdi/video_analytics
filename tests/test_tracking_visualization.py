@@ -44,6 +44,11 @@ def test_reid_is_explicitly_opt_in() -> None:
     assert build_parser().parse_args(["input.mp4", "--enable-reid"]).enable_reid is True
 
 
+def test_tracker_cli_accepts_registered_types() -> None:
+    assert build_parser().parse_args(["input.mp4"]).tracker is None
+    assert build_parser().parse_args(["input.mp4", "--tracker", "stabletrack"]).tracker == "stabletrack"
+
+
 def test_trajectory_line_can_be_hidden_without_hiding_track_annotation() -> None:
     frame = np.zeros((80, 80, 3), dtype=np.uint8)
     item = observation()

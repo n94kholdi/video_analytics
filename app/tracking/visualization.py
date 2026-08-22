@@ -19,6 +19,7 @@ def annotate_tracks(
     show_trajectories: bool = True,
     current_people: int | None = None,
     total_unique_people: int | None = None,
+    tracker_name: str | None = None,
 ) -> NDArray[np.uint8]:
     """Draw track metadata and optionally draw smoothed trajectory trails."""
 
@@ -58,9 +59,10 @@ def annotate_tracks(
             cv2.LINE_AA,
         )
     if tracking_ms is not None:
+        prefix = f"{tracker_name} " if tracker_name else ""
         cv2.putText(
             annotated,
-            f"tracking {tracking_ms:.1f} ms",
+            f"{prefix}tracking {tracking_ms:.1f} ms",
             (10, 24),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,

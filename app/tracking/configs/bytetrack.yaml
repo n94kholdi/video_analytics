@@ -1,0 +1,6 @@
+tracker:
+  type: bytetrack
+  activation_threshold: 0.40
+  lost_track_buffer: 30
+  match_threshold: 0.30
+  history_size: 90

@@ -17,36 +17,13 @@ with warnings.catch_warnings():
     from trackers import ByteTrackTracker
 
 from app.core.models import Detection, TrackObservation, TrajectoryPoint
-from app.tracking.base import TrackingResult
+from app.tracking.base import BaseTracker, TrackingResult
+from app.tracking.conversion import detections_to_supervision
 from app.tracking.reid import OsNetReIdentifier, ReIdGallery
+from app.tracking.trajectories import foot_point, smooth_point
 
 
-def foot_point(xyxy: Sequence[float]) -> tuple[float, float]:
-    """Return the bottom-center image point for an ``xyxy`` box."""
-
-    x1, _y1, x2, y2 = xyxy
-    return ((float(x1) + float(x2)) / 2.0, float(y2))
-
-
-def detections_to_supervision(detections: Sequence[Detection]) -> sv.Detections:
-    """Convert shared person detections to ByteTrack's input representation."""
-
-    people = [
-        detection
-        for detection in detections
-        if detection.class_id == 0
-        and (detection.class_name is None or detection.class_name.lower() == "person")
-    ]
-    if not people:
-        return sv.Detections.empty()
-    return sv.Detections(
-        xyxy=np.asarray([item.xyxy for item in people], dtype=np.float32),
-        confidence=np.asarray([item.confidence for item in people], dtype=np.float32),
-        class_id=np.zeros(len(people), dtype=int),
-    )
-
-
-class ByteTrackAdapter:
+class ByteTrackAdapter(BaseTracker):
     """Adapt maintained ByteTrack output to shared timestamped observations."""
 
     def __init__(
@@ -66,6 +43,7 @@ class ByteTrackAdapter:
         reid_max_age_frames: int = 300,
         reid_interval: int = 5,
     ) -> None:
+        self.name = "bytetrack"
         _unit_interval(activation_threshold, "activation_threshold")
         _unit_interval(match_threshold, "match_threshold")
         _unit_interval(smoothing_alpha, "smoothing_alpha", lower_open=True)
@@ -104,9 +82,11 @@ class ByteTrackAdapter:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
             try:
+                # ByteTrack scales the buffer by frame_rate/30, which truncates to 0
+                # at 0.5 FPS. lost_track_buffer is already in processed-frame units.
                 self._tracker = ByteTrackTracker(
                     lost_track_buffer=lost_track_buffer,
-                    frame_rate=frame_rate,
+                    frame_rate=30.0,
                     track_activation_threshold=activation_threshold,
                     minimum_consecutive_frames=confirmation_frames,
                     minimum_iou_threshold=match_threshold,
@@ -132,11 +112,13 @@ class ByteTrackAdapter:
         timestamp: float,
         frame_index: int,
         frame: np.ndarray | None = None,
+        intermediate_frame: np.ndarray | None = None,
     ) -> TrackingResult:
         """Advance ByteTrack and retain only observations seen in this frame."""
 
         self._validate_frame(camera_id, timestamp, frame_index)
         self._validate_detections(detections, frame_index)
+        _ = intermediate_frame
         if self._reidentifier is not None and frame is None:
             raise ValueError("frame is required when OSNet ReID is enabled")
         started = perf_counter()
@@ -219,7 +201,7 @@ class ByteTrackAdapter:
             history = self._histories.setdefault(
                 track_id, deque(maxlen=self.history_size)
             )
-            smoothed = _smooth(raw_point, history, self.smoothing_alpha)
+            smoothed = smooth_point(raw_point, history, self.smoothing_alpha)
             history.append(
                 TrajectoryPoint(
                     timestamp=float(timestamp),
@@ -244,6 +226,7 @@ class ByteTrackAdapter:
                     detection_confidence=confidence,
                     confirmed=tracklet.tracker_id != -1,
                     trajectory=tuple(history),
+                    class_id=0,
                 )
             )
 
@@ -270,6 +253,7 @@ class ByteTrackAdapter:
             observations=tuple(sorted(observations, key=lambda item: item.track_id)),
             expired_track_ids=expired,
             tracking_ms=(perf_counter() - started) * 1000.0,
+            tracker_name=self.name,
         )
 
     def reset(self) -> None:
@@ -401,20 +385,6 @@ def _intersection_over_union(first: Sequence[float], second: Sequence[float]) ->
     )
     union = first_area + second_area - intersection
     return intersection / union if union > 0.0 else 0.0
-
-
-def _smooth(
-    point: tuple[float, float],
-    history: deque[TrajectoryPoint],
-    alpha: float,
-) -> tuple[float, float]:
-    if not history:
-        return point
-    previous = history[-1].smoothed_position
-    return (
-        alpha * point[0] + (1.0 - alpha) * previous[0],
-        alpha * point[1] + (1.0 - alpha) * previous[1],
-    )
 
 
 def _unit_interval(value: float, name: str, *, lower_open: bool = False) -> None:

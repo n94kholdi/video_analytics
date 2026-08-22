@@ -45,6 +45,7 @@ PROCESSING_METRICS = (
 )
 TRACKING_METRICS = (
     MetricDefinition("current_people", "Current people", display="counter"),
+    MetricDefinition("active_tracker", "Active tracker", value_type="string", display="status"),
 ) + PROCESSING_METRICS
 COUNTING_METRICS = TRACKING_METRICS + (
     MetricDefinition("zone_occupancy", "Area occupancy", value_type="table", display="table"),

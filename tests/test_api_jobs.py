@@ -234,6 +234,33 @@ def test_tracking_command_does_not_receive_analytics_camera_config(tmp_path: Pat
     assert "--camera-config" not in command
     assert command[command.index("--camera-id") + 1] == "test-camera"
     assert command[command.index("--max-frames") + 1] == "10"
+    assert command[command.index("--tracker") + 1] == "bytetrack"
+
+
+def test_selected_tracker_is_persisted_and_added_to_command(tmp_path: Path) -> None:
+    manager = JobManager(tmp_path, python_executable="python-test")
+    job_dir = tmp_path / "job-stable"
+    job_dir.mkdir()
+    source = job_dir / "input.mp4"
+    source.touch()
+    record = manager.register(
+        job_id="job-stable",
+        application_id="tracking",
+        original_filename="shop.mp4",
+        camera_id="test-camera",
+        input_video=source,
+        camera_config=None,
+        max_frames=8,
+        tracker_type="stabletrack",
+    )
+
+    command, _ = manager._build_command(record, get_application("tracking"))
+    configuration = json.loads((job_dir / "configuration.json").read_text())
+
+    assert command[command.index("--tracker") + 1] == "stabletrack"
+    assert record.tracker_type == "stabletrack"
+    assert manager.public_dict(record)["tracker_type"] == "stabletrack"
+    assert configuration["tracker_type"] == "stabletrack"
 
 
 def test_admin_selected_reid_is_persisted_and_added_to_tracking_command(
