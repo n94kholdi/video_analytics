@@ -20,6 +20,16 @@ def test_application_catalog_has_unique_ids() -> None:
     )
 
 
+def test_people_counting_exposes_unique_people_metric() -> None:
+    keys = {item.key for item in get_application("people_counting").metrics}
+    definition = next(item for item in get_application("people_counting").metrics if item.key == "total_unique_people")
+
+    assert "current_people" in keys
+    assert "total_unique_people" in keys
+    assert definition.aggregation == "total"
+    assert definition.display == "counter"
+
+
 def test_configured_applications_declare_camera_config_requirement() -> None:
     assert get_application("restricted_area").requires_camera_config
     assert get_application("configured_queue").requires_camera_config
@@ -32,6 +42,7 @@ def test_configured_queue_exposes_occupancy_and_speed_metrics() -> None:
     assert {"queue_length", "queue_speed", "queue_wait_seconds", "queue_details"} <= keys
     assert "entry_count" not in keys
     assert "exit_count" not in keys
+    assert "total_unique_people" not in keys
 
 
 def test_restricted_area_exposes_lifecycle_counters() -> None:
@@ -45,6 +56,7 @@ def test_restricted_area_exposes_lifecycle_counters() -> None:
     } <= keys
     assert "entry_count" not in keys
     assert "exit_count" not in keys
+    assert "total_unique_people" not in keys
 
 
 def test_heatmap_applications_expose_top_crowded_regions_metric() -> None:

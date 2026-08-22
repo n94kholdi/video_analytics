@@ -34,6 +34,51 @@ def test_stabletrack_reuses_id_across_two_second_gap() -> None:
     assert second.observations[0].timestamp == pytest.approx(12.0)
 
 
+def test_stabletrack_recovers_id_when_the_same_person_returns_nearby() -> None:
+    tracker = StableTrackAdapter(
+        frame_rate=0.5,
+        confirmation_frames=1,
+        max_age_seconds=8.0,
+        use_visual_tracking=False,
+    )
+    first = tracker.update([person(0.0)], camera_id="cam", timestamp=0.0, frame_index=0)
+    tracker.update([], camera_id="cam", timestamp=2.0, frame_index=1)
+    resumed = tracker.update([person(4.0)], camera_id="cam", timestamp=4.0, frame_index=2)
+
+    assert resumed.observations[0].track_id == first.observations[0].track_id
+
+
+def test_stabletrack_does_not_give_a_lost_id_to_a_distant_person() -> None:
+    tracker = StableTrackAdapter(
+        frame_rate=0.5,
+        confirmation_frames=1,
+        max_age_seconds=8.0,
+        use_visual_tracking=False,
+    )
+    first = tracker.update([person(0.0)], camera_id="cam", timestamp=0.0, frame_index=0)
+    tracker.update([], camera_id="cam", timestamp=2.0, frame_index=1)
+    resumed = tracker.update([person(80.0)], camera_id="cam", timestamp=4.0, frame_index=2)
+
+    assert resumed.observations[0].track_id != first.observations[0].track_id
+
+
+def test_stabletrack_does_not_recover_after_the_lost_window() -> None:
+    tracker = StableTrackAdapter(
+        frame_rate=0.5,
+        confirmation_frames=1,
+        max_age_seconds=8.0,
+        lost_recovery_seconds=4.0,
+        use_visual_tracking=False,
+    )
+    first = tracker.update([person(0.0)], camera_id="cam", timestamp=0.0, frame_index=0)
+    tracker.update([], camera_id="cam", timestamp=2.0, frame_index=1)
+    tracker.update([], camera_id="cam", timestamp=4.0, frame_index=2)
+    tracker.update([], camera_id="cam", timestamp=6.0, frame_index=3)
+    resumed = tracker.update([person(4.0)], camera_id="cam", timestamp=8.0, frame_index=4)
+
+    assert resumed.observations[0].track_id != first.observations[0].track_id
+
+
 def test_stabletrack_expires_after_max_age_seconds() -> None:
     tracker = StableTrackAdapter(
         frame_rate=0.5,

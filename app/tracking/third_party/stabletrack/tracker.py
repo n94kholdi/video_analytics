@@ -41,6 +41,8 @@ class StableTrackConfig:
     bbd_beta: float = 0.25
     bbd_scale: float = 1.0
     max_age_seconds: float = 8.0
+    lost_recovery_seconds: float = 4.0
+    lost_bbd_threshold: float = 4.0
     confirmation_hits: int = 1
     ema: float = 0.9
     use_visual_tracking: bool = True
@@ -126,37 +128,76 @@ class StableTrack:
         unmatched_tracks = list(range(len(self.tracks)))
         unmatched_dets = list(range(len(boxes)))
         matches: list[tuple[int, int]] = []
+        active_tracks = [
+            index for index in unmatched_tracks if self.tracks[index].time_since_update <= 1e-6
+        ]
+        lost_tracks = [
+            index for index in unmatched_tracks if self.tracks[index].time_since_update > 1e-6
+        ]
+        recent_lost = [
+            index
+            for index in lost_tracks
+            if self.tracks[index].time_since_update <= self.config.lost_recovery_seconds
+        ]
+
+        def _consume(pairs: list[tuple[int, int]], tracks: list[int]) -> list[int]:
+            matches.extend(pairs)
+            used_tracks = {row for row, _col in pairs}
+            used_dets = {col for _row, col in pairs}
+            unmatched_dets[:] = [index for index in unmatched_dets if index not in used_dets]
+            return [index for index in tracks if index not in used_tracks]
 
         if len(high_indices):
-            first = self._associate(
-                unmatched_tracks,
-                list(high_indices),
-                predicted,
-                detection_boxes,
-                embeddings,
-                dt,
-                stage="bbd",
+            active_tracks = _consume(
+                self._associate(
+                    active_tracks,
+                    list(high_indices),
+                    predicted,
+                    detection_boxes,
+                    embeddings,
+                    dt,
+                    stage="bbd",
+                ),
+                active_tracks,
             )
-            matches.extend(first)
-            unmatched_tracks = [index for index in unmatched_tracks if index not in {row for row, _col in first}]
-            unmatched_dets = [index for index in unmatched_dets if index not in {col for _row, col in first}]
 
         remaining_high = [index for index in unmatched_dets if index in set(high_indices)]
         remaining_low = [index for index in unmatched_dets if index in set(low_indices)]
         second_candidates = remaining_high + remaining_low
-        if unmatched_tracks and second_candidates:
-            second = self._associate(
-                unmatched_tracks,
-                second_candidates,
-                predicted,
-                detection_boxes,
-                embeddings,
-                dt,
-                stage="iou",
+        if active_tracks and second_candidates:
+            active_tracks = _consume(
+                self._associate(
+                    active_tracks,
+                    second_candidates,
+                    predicted,
+                    detection_boxes,
+                    embeddings,
+                    dt,
+                    stage="iou",
+                ),
+                active_tracks,
             )
-            matches.extend(second)
-            unmatched_tracks = [index for index in unmatched_tracks if index not in {row for row, _col in second}]
-            unmatched_dets = [index for index in unmatched_dets if index not in {col for _row, col in second}]
+
+        # Recover a recently lost ID only when the detection is still near the
+        # predicted box. Distant or long-lost tracks must not steal a new person.
+        remaining_high = [index for index in unmatched_dets if index in set(high_indices)]
+        if recent_lost and remaining_high:
+            recent_lost = _consume(
+                self._associate(
+                    recent_lost,
+                    remaining_high,
+                    predicted,
+                    detection_boxes,
+                    embeddings,
+                    dt,
+                    stage="bbd",
+                    bbd_threshold=self.config.lost_bbd_threshold,
+                ),
+                recent_lost,
+            )
+        unmatched_tracks = [
+            index for index in lost_tracks + active_tracks if index not in {row for row, _col in matches}
+        ]
 
         for track_index, det_index in matches:
             velocity = velocities.get(track_index)
@@ -262,6 +303,7 @@ class StableTrack:
         dt: float,
         *,
         stage: str,
+        bbd_threshold: float | None = None,
     ) -> list[tuple[int, int]]:
         if not track_indices or not det_indices:
             return []
@@ -269,6 +311,7 @@ class StableTrack:
         appearance_available = any(item is not None for item in embeddings) or any(
             self.tracks[index].embedding is not None for index in track_indices
         )
+        bbd_limit = self.config.bbd_threshold if bbd_threshold is None else bbd_threshold
         for row, track_index in enumerate(track_indices):
             track = self.tracks[track_index]
             pred = predicted[track_index]
@@ -285,7 +328,7 @@ class StableTrack:
                         beta=self.config.bbd_beta,
                         scale=self.config.bbd_scale,
                     )
-                    spatial_ok = distance < self.config.bbd_threshold
+                    spatial_ok = distance < bbd_limit
                     appearance_ok = (
                         (not appearance_available)
                         or similarity >= self.config.reid_high_threshold

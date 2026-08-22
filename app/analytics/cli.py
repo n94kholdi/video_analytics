@@ -146,7 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-trajectories",
         action="store_true",
-        help="hide track trails in the annotated video",
+        help="deprecated: people-counting video never draws track trails",
     )
     return parser
 
@@ -519,7 +519,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     frame,
                     observations,
                     tracking_ms=tracked.tracking_ms,
-                    show_trajectories=not args.no_trajectories,
+                    show_trajectories=False,
                     tracker_name=tracker.name,
                 )
                 counted_frame = annotate_people_counts(

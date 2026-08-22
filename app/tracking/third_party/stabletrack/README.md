@@ -47,5 +47,10 @@ Backward visual tracking. This deployment processes video at **0.5 FPS**
 - Intermediate frames are used when the caller provides them
 - On processed-only streams (fleet / dashboard stride) visual tracking is
   skipped or run last-frame→current-frame as a degraded fallback
+- Lost IDs may be recovered for up to ``lost_recovery_seconds`` (default 4 s)
+  and only if Bbox-Based Distance is below ``lost_bbd_threshold`` (default 4,
+  much tighter than the live-track threshold of 16). A brief miss or occlusion
+  can keep the same person. A distant detection, or a track lost longer than
+  that window, gets a new ID so crowded scenes do not stall unique-people counts.
 
 `max_age_seconds` defaults to 8 s (four missed 0.5 FPS samples).

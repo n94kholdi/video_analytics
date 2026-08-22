@@ -42,6 +42,8 @@ class StableTrackAdapter(BaseTracker):
         iou_threshold: float = 0.4,
         reid_low_threshold: float = 0.3,
         max_age_seconds: float | None = None,
+        lost_recovery_seconds: float = 4.0,
+        lost_bbd_threshold: float = 4.0,
         use_visual_tracking: bool = True,
     ) -> None:
         _ = (match_threshold, reid_max_age_frames, reid_interval)
@@ -69,6 +71,8 @@ class StableTrackAdapter(BaseTracker):
                 reid_high_threshold=reid_similarity_threshold,
                 reid_low_threshold=reid_low_threshold,
                 max_age_seconds=age_seconds,
+                lost_recovery_seconds=lost_recovery_seconds,
+                lost_bbd_threshold=lost_bbd_threshold,
                 confirmation_hits=max(1, confirmation_frames),
                 use_visual_tracking=use_visual_tracking,
             )
