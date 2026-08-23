@@ -60,7 +60,7 @@ def test_benchmark_runner_compares_trackers_on_cached_detections(tmp_path: Path)
     ]
     runner = BenchmarkRunner()
     reports = []
-    for tracker_type in ("bytetrack", "stabletrack", "deepocsort"):
+    for tracker_type in ("bytetrack", "stabletrack", "deepocsort", "botsort"):
         report, observations = runner.run(
             frames,
             tracker_type=tracker_type,
@@ -79,7 +79,7 @@ def test_benchmark_runner_compares_trackers_on_cached_detections(tmp_path: Path)
         assert report.metrics is not None
         assert report.metrics.id_switches == 0
 
-    assert {item.tracker for item in reports} == {"bytetrack", "stabletrack", "deepocsort"}
+    assert {item.tracker for item in reports} == {"bytetrack", "stabletrack", "deepocsort", "botsort"}
 
 
 def test_same_cached_detections_are_reused_by_factory_trackers() -> None:
@@ -87,11 +87,14 @@ def test_same_cached_detections_are_reused_by_factory_trackers() -> None:
     first = create_tracker("bytetrack", frame_rate=0.5, confirmation_frames=1)
     second = create_tracker("stabletrack", frame_rate=0.5, confirmation_frames=1)
     third = create_tracker("deepocsort", frame_rate=0.5, confirmation_frames=1)
+    fourth = create_tracker("botsort", frame_rate=0.5, confirmation_frames=1)
     left = first.update(detections, camera_id="cam", timestamp=0.0, frame_index=0)
     right = second.update(detections, camera_id="cam", timestamp=0.0, frame_index=0)
     deep = third.update(detections, camera_id="cam", timestamp=0.0, frame_index=0)
+    bot = fourth.update(detections, camera_id="cam", timestamp=0.0, frame_index=0)
 
     assert left.observations[0].xyxy == detections[0].xyxy
     assert right.observations[0].xyxy == detections[0].xyxy
     assert deep.observations[0].xyxy == detections[0].xyxy
-    assert left.normalized()[0].class_id == right.normalized()[0].class_id == deep.normalized()[0].class_id == 0
+    assert bot.observations[0].xyxy == detections[0].xyxy
+    assert left.normalized()[0].class_id == right.normalized()[0].class_id == deep.normalized()[0].class_id == bot.normalized()[0].class_id == 0

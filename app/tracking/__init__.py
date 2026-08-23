@@ -1,6 +1,7 @@
 """Multi-object tracking interfaces, factory, and adapters."""
 
 from app.tracking.base import BaseTracker, NormalizedTrack, PersonTracker, TrackingResult
+from app.tracking.botsort_adapter import BoTSortAdapter
 from app.tracking.bytetrack import ByteTrackAdapter, detections_to_supervision, foot_point
 from app.tracking.conversion import detections_to_supervision as convert_detections
 from app.tracking.deepocsort_adapter import DeepOCSortAdapter
@@ -9,6 +10,7 @@ from app.tracking.stabletrack_adapter import StableTrackAdapter
 
 __all__ = [
     "BaseTracker",
+    "BoTSortAdapter",
     "ByteTrackAdapter",
     "DeepOCSortAdapter",
     "NormalizedTrack",

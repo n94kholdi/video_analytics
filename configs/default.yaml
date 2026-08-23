@@ -35,3 +35,7 @@ tracker:
   aw_param: 0.50
   delta_t_seconds: 2.0
   use_cmc: false
+  proximity_thresh: 1.0
+  track_low_threshold: 0.10
+  new_track_threshold: 0.40
+  embedding_alpha: 0.90

@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping
 
 from app.core.config import AppSettings
 from app.tracking.base import BaseTracker
+from app.tracking.botsort_adapter import BoTSortAdapter
 from app.tracking.bytetrack import ByteTrackAdapter
 from app.tracking.deepocsort_adapter import DeepOCSortAdapter
 from app.tracking.stabletrack_adapter import StableTrackAdapter
@@ -46,6 +47,13 @@ TRACKER_REGISTRY: dict[str, TrackerSpec] = {
         "Deep OC-SORT",
         "Observation-centric motion plus adaptive appearance association.",
         DeepOCSortAdapter,
+        requires_reid=False,
+    ),
+    "botsort": TrackerSpec(
+        "botsort",
+        "BoT-SORT",
+        "ByteTrack associations plus camera-motion compensation and optional ReID fusion.",
+        BoTSortAdapter,
         requires_reid=False,
     ),
 }
@@ -113,6 +121,10 @@ def _default_kwargs(settings: AppSettings | None) -> dict[str, Any]:
         "aw_param": settings.tracker_aw_param,
         "delta_t_seconds": settings.tracker_delta_t_seconds,
         "use_cmc": settings.tracker_use_cmc,
+        "proximity_thresh": settings.tracker_proximity_thresh,
+        "track_low_threshold": settings.tracker_track_low_threshold,
+        "new_track_threshold": settings.tracker_new_track_threshold,
+        "embedding_alpha": settings.tracker_embedding_alpha,
     }
 
 

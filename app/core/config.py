@@ -15,7 +15,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "configs" / "cameras" / "example_lobby.yaml"
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
 _ALLOWED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
-_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack", "deepocsort"})
+_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack", "deepocsort", "botsort"})
 
 
 class ConfigError(ValueError):
@@ -51,6 +51,10 @@ class AppSettings:
     tracker_aw_param: float = 0.5
     tracker_delta_t_seconds: float = 2.0
     tracker_use_cmc: bool = False
+    tracker_proximity_thresh: float = 1.0
+    tracker_track_low_threshold: float = 0.1
+    tracker_new_track_threshold: float | None = None
+    tracker_embedding_alpha: float = 0.9
     detector_model: Path | None = None
     reid_model: Path | None = None
 
@@ -187,6 +191,24 @@ class AppSettings:
             "tracker.delta_t_seconds",
         )
         tracker_use_cmc = _boolean(tracker.get("use_cmc", False), "tracker.use_cmc")
+        tracker_proximity_thresh = _threshold(
+            tracker.get("proximity_thresh", 1.0),
+            "tracker.proximity_thresh",
+        )
+        tracker_track_low_threshold = _threshold(
+            tracker.get("track_low_threshold", 0.1),
+            "tracker.track_low_threshold",
+        )
+        new_track_value = tracker.get("new_track_threshold")
+        tracker_new_track_threshold = (
+            None
+            if new_track_value is None
+            else _threshold(new_track_value, "tracker.new_track_threshold")
+        )
+        tracker_embedding_alpha = _threshold(
+            tracker.get("embedding_alpha", 0.9),
+            "tracker.embedding_alpha",
+        )
 
         return cls(
             name=name,
@@ -214,6 +236,10 @@ class AppSettings:
             tracker_aw_param=tracker_aw_param,
             tracker_delta_t_seconds=tracker_delta_t_seconds,
             tracker_use_cmc=tracker_use_cmc,
+            tracker_proximity_thresh=tracker_proximity_thresh,
+            tracker_track_low_threshold=tracker_track_low_threshold,
+            tracker_new_track_threshold=tracker_new_track_threshold,
+            tracker_embedding_alpha=tracker_embedding_alpha,
             detector_model=detector_model,
             reid_model=reid_model,
         )

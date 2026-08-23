@@ -65,6 +65,10 @@ def test_default_configuration_loads() -> None:
     assert settings.tracker_w_association_emb == 0.75
     assert settings.tracker_delta_t_seconds == 2.0
     assert settings.tracker_use_cmc is False
+    assert settings.tracker_proximity_thresh == 1.0
+    assert settings.tracker_track_low_threshold == 0.1
+    assert settings.tracker_new_track_threshold == 0.4
+    assert settings.tracker_embedding_alpha == 0.9
     assert settings.output_dir == PROJECT_ROOT / "outputs"
 
 
@@ -75,7 +79,7 @@ def test_relative_paths_resolve_from_project_root() -> None:
     assert settings.database_path == PROJECT_ROOT / "outputs" / "test.sqlite3"
 
 
-@pytest.mark.parametrize("tracker_name", ["stabletrack", "deepocsort"])
+@pytest.mark.parametrize("tracker_name", ["stabletrack", "deepocsort", "botsort"])
 def test_environment_overrides_are_validated(tracker_name: str) -> None:
     settings = load_settings(
         environ={

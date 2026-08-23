@@ -1,0 +1,14 @@
+tracker:
+  type: botsort
+  activation_threshold: 0.40
+  lost_track_buffer: 4
+  match_threshold: 0.30
+  history_size: 90
+  iou_threshold: 0.30
+  reid_high_threshold: 0.65
+  max_age_seconds: 8.0
+  proximity_thresh: 1.0
+  track_low_threshold: 0.10
+  new_track_threshold: 0.40
+  embedding_alpha: 0.90
+  use_cmc: false
