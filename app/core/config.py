@@ -15,7 +15,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "configs" / "cameras" / "example_lobby.yaml"
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
 _ALLOWED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
-_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack", "deepocsort", "botsort"})
+_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack", "deepocsort", "botsort", "ucmctrack"})
 
 
 class ConfigError(ValueError):
@@ -55,6 +55,7 @@ class AppSettings:
     tracker_track_low_threshold: float = 0.1
     tracker_new_track_threshold: float | None = None
     tracker_embedding_alpha: float = 0.9
+    tracker_camera_geometry_dir: Path | None = None
     detector_model: Path | None = None
     reid_model: Path | None = None
 
@@ -209,6 +210,13 @@ class AppSettings:
             tracker.get("embedding_alpha", 0.9),
             "tracker.embedding_alpha",
         )
+        geometry_dir_value = tracker.get("camera_geometry_dir")
+        tracker_camera_geometry_dir = None
+        if geometry_dir_value is not None:
+            tracker_camera_geometry_dir = _resolve_path(
+                _non_empty_string(geometry_dir_value, "tracker.camera_geometry_dir"),
+                base_dir,
+            )
 
         return cls(
             name=name,
@@ -240,6 +248,7 @@ class AppSettings:
             tracker_track_low_threshold=tracker_track_low_threshold,
             tracker_new_track_threshold=tracker_new_track_threshold,
             tracker_embedding_alpha=tracker_embedding_alpha,
+            tracker_camera_geometry_dir=tracker_camera_geometry_dir,
             detector_model=detector_model,
             reid_model=reid_model,
         )

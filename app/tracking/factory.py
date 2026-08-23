@@ -17,6 +17,7 @@ from app.tracking.botsort_adapter import BoTSortAdapter
 from app.tracking.bytetrack import ByteTrackAdapter
 from app.tracking.deepocsort_adapter import DeepOCSortAdapter
 from app.tracking.stabletrack_adapter import StableTrackAdapter
+from app.tracking.ucmctrack_adapter import UCMCTrackAdapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,13 @@ TRACKER_REGISTRY: dict[str, TrackerSpec] = {
         "BoT-SORT",
         "ByteTrack associations plus camera-motion compensation and optional ReID fusion.",
         BoTSortAdapter,
+        requires_reid=False,
+    ),
+    "ucmctrack": TrackerSpec(
+        "ucmctrack",
+        "UCMCTrack",
+        "Ground-plane motion association; runs uncalibrated and uses per-camera geometry when provided.",
+        UCMCTrackAdapter,
         requires_reid=False,
     ),
 }
@@ -125,6 +133,7 @@ def _default_kwargs(settings: AppSettings | None) -> dict[str, Any]:
         "track_low_threshold": settings.tracker_track_low_threshold,
         "new_track_threshold": settings.tracker_new_track_threshold,
         "embedding_alpha": settings.tracker_embedding_alpha,
+        "camera_geometry_dir": settings.tracker_camera_geometry_dir,
     }
 
 

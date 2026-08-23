@@ -7,6 +7,7 @@ from app.tracking.conversion import detections_to_supervision as convert_detecti
 from app.tracking.deepocsort_adapter import DeepOCSortAdapter
 from app.tracking.factory import available_trackers, create_tracker, public_tracker_catalog
 from app.tracking.stabletrack_adapter import StableTrackAdapter
+from app.tracking.ucmctrack_adapter import UCMCTrackAdapter
 
 __all__ = [
     "BaseTracker",
@@ -17,6 +18,7 @@ __all__ = [
     "PersonTracker",
     "StableTrackAdapter",
     "TrackingResult",
+    "UCMCTrackAdapter",
     "available_trackers",
     "convert_detections",
     "create_tracker",

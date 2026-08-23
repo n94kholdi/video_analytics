@@ -67,14 +67,17 @@ Tracking is separated into:
 - `app.tracking.stabletrack_adapter`: StableTrack adapter for 0.5 FPS / 2 s gaps
 - `app.tracking.deepocsort_adapter`: Deep OC-SORT adapter (OCM + Adaptive Weighting)
 - `app.tracking.botsort_adapter`: BoT-SORT adapter (GMC + width-height Kalman + optional ReID)
+- `app.tracking.ucmctrack_adapter`: UCMCTrack adapter (mapped Mahalanobis association, optional camera geometry)
+- `app.tracking.calibration`: per-camera UCMCTrack geometry catalog (uncalibrated by default)
 - `app.tracking.third_party.stabletrack`: isolated paper implementation (no official repo)
 - `app.tracking.third_party.deepocsort`: isolated Deep OC-SORT backend (MIT, official algorithm)
 - `app.tracking.third_party.botsort`: isolated BoT-SORT backend (MIT, official algorithm)
+- `app.tracking.third_party.ucmctrack`: isolated UCMCTrack backend (MIT, official algorithm)
 - `app.tracking.benchmark`: cached-detection HOTA/IDF1/MOTA runner
 - `app.tracking.visualization`: track IDs, state, foot points, and trajectories
 - `app.tracking.cli`: recorded-video detector/tracker runner using source times
 
-Select a tracker with `tracker.type: bytetrack|stabletrack|deepocsort|botsort`, `--tracker`, or the
+Select a tracker with `tracker.type: bytetrack|stabletrack|deepocsort|botsort|ucmctrack`, `--tracker`, or the
 temporary dashboard selector. `GET /api/v1/trackers` lists registered types so
 future adapters do not require a dashboard rebuild.
 

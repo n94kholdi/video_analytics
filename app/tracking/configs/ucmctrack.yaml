@@ -1,0 +1,13 @@
+tracker:
+  type: ucmctrack
+  activation_threshold: 0.40
+  lost_track_buffer: 4
+  match_threshold: 0.30
+  history_size: 90
+  # Keep a missed person for one processed 0.5 FPS frame (~2 s), then retire the ID.
+  # A new person never reuses that ID.
+  max_age_seconds: 2.0
+  track_low_threshold: 0.10
+  # Optional directory of per-camera YAML or official cam_para files.
+  # Filename stem (or camera_id in YAML) must match the runtime camera_id.
+  # camera_geometry_dir: app/tracking/calibration/cameras

@@ -62,7 +62,7 @@ class FleetSettings:
         fps = min(FLEET_FPS, _positive_float(environment.get("VIDEO_ANALYTICS_FLEET_FPS"), FLEET_FPS))
         interval = 1.0 / fps
         tracker_type = (environment.get("VIDEO_ANALYTICS_TRACKER") or "bytetrack").strip().lower()
-        if tracker_type not in {"bytetrack", "stabletrack", "deepocsort", "botsort"}:
+        if tracker_type not in {"bytetrack", "stabletrack", "deepocsort", "botsort", "ucmctrack"}:
             tracker_type = "bytetrack"
         return cls(
             enabled=_flag(environment.get("VIDEO_ANALYTICS_FLEET_ENABLED"), False),

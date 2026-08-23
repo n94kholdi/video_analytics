@@ -39,3 +39,7 @@ tracker:
   track_low_threshold: 0.10
   new_track_threshold: 0.40
   embedding_alpha: 0.90
+  # Optional per-camera geometry for UCMCTrack. Drop YAML or cam_para files
+  # in this directory; camera_id / filename stem must match the runtime id.
+  # Uncalibrated cameras keep working without a file.
+  # camera_geometry_dir: app/tracking/calibration/cameras

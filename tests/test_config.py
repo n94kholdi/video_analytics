@@ -79,7 +79,7 @@ def test_relative_paths_resolve_from_project_root() -> None:
     assert settings.database_path == PROJECT_ROOT / "outputs" / "test.sqlite3"
 
 
-@pytest.mark.parametrize("tracker_name", ["stabletrack", "deepocsort", "botsort"])
+@pytest.mark.parametrize("tracker_name", ["stabletrack", "deepocsort", "botsort", "ucmctrack"])
 def test_environment_overrides_are_validated(tracker_name: str) -> None:
     settings = load_settings(
         environ={

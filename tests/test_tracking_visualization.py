@@ -49,6 +49,7 @@ def test_tracker_cli_accepts_registered_types() -> None:
     assert build_parser().parse_args(["input.mp4", "--tracker", "stabletrack"]).tracker == "stabletrack"
     assert build_parser().parse_args(["input.mp4", "--tracker", "deepocsort"]).tracker == "deepocsort"
     assert build_parser().parse_args(["input.mp4", "--tracker", "botsort"]).tracker == "botsort"
+    assert build_parser().parse_args(["input.mp4", "--tracker", "ucmctrack"]).tracker == "ucmctrack"
 
 
 def test_trajectory_line_can_be_hidden_without_hiding_track_annotation() -> None:
