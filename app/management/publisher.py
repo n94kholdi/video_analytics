@@ -1,20 +1,24 @@
 """Producer-side minute compaction with a durable HTTP outbox.
 
 Frame-rate data never crosses the service boundary. Each worker keeps constant-size
-minute accumulators and writes one small outbox document when the minute closes.
+minute accumulators and overwrites one small outbox document as the current minute
+grows, then closes that minute when the clock rolls.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import threading
+from time import monotonic
 from typing import Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from app.core.models import Event
 
@@ -30,8 +34,13 @@ class MinutePublisher:
         self.critical_seconds = float(os.environ.get("ANALYTICS_QUEUE_CRITICAL_SECONDS", "600"))
         self.outbox = Path(os.environ.get("ANALYTICS_OUTBOX_DIR", "/tmp/video-analytics-outbox")) / camera_id
         self.max_outbox_files = max(60, int(os.environ.get("ANALYTICS_OUTBOX_MAX_FILES_PER_CAMERA", "1440")))
+        try:
+            self.publish_interval = max(0.0, float(os.environ.get("ANALYTICS_PUBLISH_INTERVAL_SECONDS", "10")))
+        except (TypeError, ValueError):
+            self.publish_interval = 10.0
         self.enabled = bool(self.url)
         self._bucket: datetime | None = None
+        self._last_snapshot_at: float | None = None
         self._occupancy: list[int] = []
         self._first_entries: int | None = None
         self._last_entries = 0
@@ -53,7 +62,8 @@ class MinutePublisher:
         now = datetime.now(timezone.utc)
         bucket = now.replace(second=0, microsecond=0)
         if self._bucket is not None and bucket != self._bucket:
-            self._flush()
+            self._write_outbox()
+            self._reset()
         self._bucket = bucket
         occupancy = metrics.get("current_people")
         if isinstance(occupancy, int) and not isinstance(occupancy, bool):
@@ -73,7 +83,7 @@ class MinutePublisher:
             for layer, points in layers.items():
                 if layer in {"occupancy", "dwell", "traffic", "congestion"} and isinstance(points, list):
                     self._spatial[str(layer)] = {"zoneId": "location", "zoneName": "کل مکان", "layer": layer,
-                                                  "bucketSeconds": 900, "coveragePercent": None, "points": points[:256]}
+                                                  "bucketSeconds": 300, "coveragePercent": None, "points": points[:256]}
         for event in events:
             self._events.append({
                 "eventId": event.event_id, "eventType": event.event_type,
@@ -83,11 +93,14 @@ class MinutePublisher:
             })
         if len(self._events) > 500:
             self._events = self._events[-500:]
+        if self._should_snapshot():
+            self._write_outbox()
+            self._last_snapshot_at = monotonic()
 
     def close(self) -> None:
         if not self.enabled:
             return
-        self._flush()
+        self._write_outbox()
         self._stop.set()
         if self._worker is not None:
             self._worker.join(timeout=3)
@@ -141,11 +154,17 @@ class MinutePublisher:
                            "value": value, "intensity": min(1, value/maximum)})
         if points:
             self._spatial["congestion"] = {"zoneId": "location", "zoneName": "کل مکان", "layer": "congestion",
-                                             "bucketSeconds": 900, "coveragePercent": None, "points": points}
+                                             "bucketSeconds": 300, "coveragePercent": None, "points": points}
 
-    def _flush(self) -> None:
+    def _should_snapshot(self) -> bool:
+        if not self._occupancy:
+            return False
+        if self._last_snapshot_at is None or self.publish_interval <= 0:
+            return True
+        return (monotonic() - self._last_snapshot_at) >= self.publish_interval
+
+    def _write_outbox(self) -> None:
         if self._bucket is None or not self._occupancy:
-            self._reset()
             return
         queues = []
         for queue_id, raw in self._queues.items():
@@ -177,7 +196,7 @@ class MinutePublisher:
             "physicallyCalibrated": any(bool(item["physicallyCalibrated"]) for item in queues),
             "queues": queues, "spatial": list(self._spatial.values()), "events": self._events,
         }
-        destination = self.outbox / f"{self._bucket.strftime('%Y%m%dT%H%M')}-{self.camera_id}-{uuid4().hex}.json"
+        destination = self.outbox / f"{self._bucket.strftime('%Y%m%dT%H%M')}-{self.camera_id}.json"
         pending = sorted(self.outbox.glob("*.json"))
         if len(pending) >= self.max_outbox_files:
             for expired in pending[:len(pending)-self.max_outbox_files+1]:
@@ -185,10 +204,10 @@ class MinutePublisher:
         temporary = destination.with_suffix(".tmp")
         temporary.write_text(json.dumps({"observations": [observation]}, separators=(",", ":")), encoding="utf-8")
         temporary.replace(destination)
-        self._reset()
 
     def _reset(self) -> None:
         self._bucket = None
+        self._last_snapshot_at = None
         self._occupancy = []
         self._first_entries = None
         self._last_entries = 0
@@ -199,7 +218,7 @@ class MinutePublisher:
         self._spatial = {}
 
     def _send_loop(self) -> None:
-        while not self._stop.wait(2):
+        while not self._stop.wait(1):
             for path in sorted(self.outbox.glob("*.json"))[:100]:
                 if self._send(path):
                     path.unlink(missing_ok=True)
@@ -213,7 +232,15 @@ class MinutePublisher:
             request = Request(str(self.url), data=payload, headers=headers, method="POST")
             with urlopen(request, timeout=5) as response:
                 return 200 <= response.status < 300
-        except (OSError, HTTPError, URLError, TimeoutError):
+        except HTTPError as exc:
+            detail = exc.read()[:400]
+            if exc.code in {400, 401, 404, 422}:
+                logger.warning("dropping invalid analytics outbox %s: %s %s", path.name, exc.code, detail)
+                return True
+            logger.warning("analytics ingest retry %s: %s %s", path.name, exc.code, detail)
+            return False
+        except (OSError, URLError, TimeoutError) as exc:
+            logger.warning("analytics ingest unavailable for %s: %s", path.name, exc)
             return False
 
 

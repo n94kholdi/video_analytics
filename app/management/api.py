@@ -117,7 +117,7 @@ def overview(query: Annotated[AnalyticsQuery, Depends(_read_query)], _: Annotate
 
 
 async def rollup_worker() -> None:
-    interval = max(30, int(os.environ.get("ANALYTICS_ROLLUP_INTERVAL_SECONDS", "60")))
+    interval = max(10, int(os.environ.get("ANALYTICS_ROLLUP_INTERVAL_SECONDS", "15")))
     while True:
         try:
             await asyncio.to_thread(analytics_repository.refresh_rollups)

@@ -35,7 +35,7 @@ class SpatialMinute(ApiModel):
 class QueueMinute(ApiModel):
     queue_id: str = Field(min_length=1, max_length=128)
     queue_name: str = Field(min_length=1, max_length=200)
-    sample_count: int = Field(ge=0, le=120)
+    sample_count: int = Field(ge=0, le=3600)
     length_sum: float = Field(ge=0)
     length_max: int | None = Field(default=None, ge=0)
     length_last: int | None = Field(default=None, ge=0)
@@ -66,9 +66,9 @@ class CameraMinute(ApiModel):
     camera_id: str = Field(min_length=1, max_length=128)
     camera_name: str | None = Field(default=None, max_length=200)
     bucket_start: datetime
-    sample_count: int = Field(ge=0, le=120)
-    expected_samples: int = Field(ge=1, le=120)
-    confidence_sum: float = Field(default=0, ge=0, le=120)
+    sample_count: int = Field(ge=0, le=3600)
+    expected_samples: int = Field(ge=1, le=3600)
+    confidence_sum: float = Field(default=0, ge=0, le=3600)
     occupancy_sum: float = Field(default=0, ge=0)
     occupancy_max: int | None = Field(default=None, ge=0)
     occupancy_last: int | None = Field(default=None, ge=0)

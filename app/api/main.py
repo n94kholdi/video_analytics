@@ -30,6 +30,7 @@ from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
 from app.core.config import DEFAULT_CAMERA_CONFIG_PATH, PROJECT_ROOT
 from app.geometry.config import load_camera_config
+from app.fleet.supervisor import fleet_supervisor
 from app.management.api import rollup_worker, router as management_router
 from app.management.repository import analytics_repository
 
@@ -68,10 +69,12 @@ app.include_router(management_router)
 async def start_analytics_store() -> None:
     analytics_repository.open()
     app.state.analytics_rollup_task = asyncio.create_task(rollup_worker())
+    app.state.fleet_task = asyncio.create_task(asyncio.to_thread(fleet_supervisor.start))
 
 
 @app.on_event("shutdown")
 async def stop_analytics_store() -> None:
+    fleet_supervisor.stop()
     task = getattr(app.state, "analytics_rollup_task", None)
     if task is not None:
         task.cancel()
@@ -123,7 +126,22 @@ class StreamFrameRequest(BaseModel):
 @app.get("/health")
 def health() -> dict[str, object]:
     analytical_store = analytics_repository.health()
-    return {"status": "ok" if analytical_store else "degraded", "analyticsStore": analytical_store}
+    fleet = fleet_supervisor.status()
+    return {
+        "status": "ok" if analytical_store else "degraded",
+        "analyticsStore": analytical_store,
+        "fleet": {
+            "enabled": fleet["enabled"],
+            "fps": fleet["fps"],
+            "cameras": fleet["cameras"],
+            "running": fleet["running"],
+        },
+    }
+
+
+@app.get("/api/v1/fleet/status")
+def fleet_status() -> dict[str, object]:
+    return {"data": fleet_supervisor.status()}
 
 
 @app.get("/api/v1/applications")
