@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="video-analytics" \
+      org.opencontainers.image.version="${VERSION}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIDEO_ANALYTICS_JOBS_DIR=/app/output/dashboard \

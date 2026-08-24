@@ -1,0 +1,99 @@
+name: Build and push video-analytics image
+
+on:
+  push:
+    # TEMPORARY: feat/docker-cicd-redesign is for GHCR publish validation only.
+    branches: [master, main, development, feat/docker-cicd-redesign]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/video-analytics
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure ONNX model weights
+        env:
+          WEIGHTS_ARCHIVE_URL: ${{ secrets.VIDEO_ANALYTICS_WEIGHTS_URL }}
+        run: |
+          set -euo pipefail
+          dest="All_weights/Weights_final"
+          mkdir -p "$dest"
+          detector="$dest/HumanDetection_light_input_640.onnx"
+          reid="$dest/Tracking_osnet_x0_25_msmt17.onnx"
+          if [[ -f "$detector" && -f "$reid" ]]; then
+            echo "Model weights present in the checkout."
+            exit 0
+          fi
+          if [[ -z "${WEIGHTS_ARCHIVE_URL:-}" ]]; then
+            echo "ONNX weights are not in git and VIDEO_ANALYTICS_WEIGHTS_URL is unset."
+            echo "Add the two runtime models to the build context or set that repository secret to a tar.gz of All_weights/Weights_final."
+            exit 1
+          fi
+          curl -fsSL "$WEIGHTS_ARCHIVE_URL" -o /tmp/weights.tgz
+          tar -xzf /tmp/weights.tgz -C .
+          test -f "$detector"
+          test -f "$reid"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Image version label
+        run: |
+          if [ "${GITHUB_REF}" = "refs/heads/feat/docker-cicd-redesign" ]; then
+            echo "VERSION_LABEL=feat-docker-cicd-redesign" >> "$GITHUB_ENV"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "VERSION_LABEL=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION_LABEL=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=feat-docker-cicd-redesign,enable=${{ github.ref == 'refs/heads/feat/docker-cicd-redesign' }}
+            type=raw,value=${{ github.sha }},enable=${{ github.ref != 'refs/heads/feat/docker-cicd-redesign' }}
+            type=sha,format=short,prefix=sha-,enable=${{ github.ref != 'refs/heads/feat/docker-cicd-redesign' }}
+            type=ref,event=tag
+            type=semver,pattern={{raw}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ env.VERSION_LABEL }}
