@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
@@ -41,6 +41,7 @@ class JobRecord:
     camera_config: str | None = None
     max_frames: int | None = None
     enable_reid: bool = False
+    tracker_type: str = "bytetrack"
     error: str | None = None
     summary: dict[str, Any] | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
@@ -91,10 +92,17 @@ class JobManager:
         camera_config: Path | None,
         max_frames: int | None,
         enable_reid: bool = False,
+        tracker_type: str = "bytetrack",
         source_type: str = "file",
         enabled_tasks: list[str] | None = None,
     ) -> JobRecord:
         get_application(application_id)
+        from app.tracking.factory import available_tracker_types
+
+        selected_tracker = tracker_type.strip().lower() or "bytetrack"
+        if selected_tracker not in available_tracker_types():
+            known = ", ".join(available_tracker_types())
+            raise ValueError(f"unknown tracker type {selected_tracker!r}; expected one of: {known}")
         now = _now()
         record = JobRecord(
             id=job_id,
@@ -113,6 +121,7 @@ class JobManager:
             camera_config=str(camera_config.resolve()) if camera_config else None,
             max_frames=max_frames,
             enable_reid=enable_reid,
+            tracker_type=selected_tracker,
             source_type=source_type,
             enabled_tasks=list(enabled_tasks or ()),
         )
@@ -236,7 +245,16 @@ class JobManager:
         data.pop("job_directory")
         data.pop("input_video")
         data.pop("camera_config")
-        data["application"] = get_application(record.application_id).public_dict()
+        try:
+            data["application"] = get_application(record.application_id).public_dict()
+        except ValueError:
+            data["application"] = {
+                "id": record.application_id,
+                "name": record.application_id,
+                "description": "This application preset is no longer available.",
+                "requires_camera_config": False,
+                "metric_schema": [],
+            }
         state_path = Path(record.job_directory) / "live_state.json"
         data["live"] = _read_json(state_path)
         data["preview_url"] = (
@@ -313,6 +331,8 @@ class JobManager:
             command.extend(("--camera-id", record.camera_id))
             if record.enable_reid:
                 command.append("--enable-reid")
+            if record.tracker_type:
+                command.extend(("--tracker", record.tracker_type))
         if record.max_frames is not None:
             command.extend(("--max-frames", str(record.max_frames)))
         command.extend(preset.arguments)
@@ -389,6 +409,7 @@ class JobManager:
             "camera_config": Path(record.camera_config).name if record.camera_config else None,
             "max_frames": record.max_frames,
             "enable_reid": record.enable_reid,
+            "tracker_type": record.tracker_type,
             "enabled_tasks": record.enabled_tasks,
             "processing_width": self.processing_width,
             "frame_stride": self.frame_stride,
@@ -430,6 +451,9 @@ class JobManager:
         for metadata in self.root.glob("*/job.json"):
             try:
                 values = json.loads(metadata.read_text(encoding="utf-8"))
+                allowed = {item.name for item in fields(JobRecord)}
+                values = {key: value for key, value in values.items() if key in allowed}
+                values.setdefault("tracker_type", "bytetrack")
                 record = JobRecord(**values)
                 if record.status in {"queued", "running", "cancelling"}:
                     record.status = "failed"

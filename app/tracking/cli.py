@@ -20,7 +20,7 @@ from app.api.live import (
 from app.core.config import ConfigError, load_settings
 from app.core.video_source import resolve_video_source, video_source_stem
 from app.detection.onnx_detector import OnnxPersonDetector
-from app.tracking.bytetrack import ByteTrackAdapter
+from app.tracking.factory import create_tracker, public_tracker_catalog
 from app.tracking.visualization import annotate_tracks
 
 
@@ -29,10 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("source", help="input recorded video or RTSP URL")
     parser.add_argument("--config", type=Path, help="application YAML configuration")
     parser.add_argument("--model", type=Path, help="override detector model path")
+    parser.add_argument("--enable-reid", action="store_true", help="enable higher-cost OSNet appearance re-identification")
     parser.add_argument(
-        "--enable-reid",
-        action="store_true",
-        help="enable higher-cost OSNet appearance re-identification",
+        "--tracker",
+        choices=tuple(item["type"] for item in public_tracker_catalog()),
+        help="tracker type (default: configuration tracker.type)",
     )
     parser.add_argument("--reid-model", type=Path, help="override OSNet ReID model path")
     parser.add_argument("--output", type=Path, help="annotated MP4 path")
@@ -102,7 +103,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not math.isfinite(fps) or fps <= 0:
         fps = 30.0
     output_fps = fps / args.frame_stride
-    tracker = ByteTrackAdapter(
+    tracker = create_tracker(
+        args.tracker,
+        settings=settings,
         activation_threshold=settings.tracker_activation_threshold,
         lost_track_buffer=settings.tracker_lost_track_buffer,
         match_threshold=settings.tracker_match_threshold,
@@ -171,6 +174,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     show_trajectories=args.show_trajectories,
                     current_people=len(current_track_ids),
                     total_unique_people=len(unique_track_ids),
+                    tracker_name=tracker.name,
                 )
             writer.write(annotated)
             frames += 1
@@ -198,6 +202,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "current_people": len(current_track_ids),
                     "total_unique_people": len(unique_track_ids),
                     "active_tracks": len(tracked.observations),
+                    "active_tracker": tracker.name,
                     "lost_tracks": lost_tracks,
                     "processing_fps": 1000.0 / max(total_ms / frames, 0.001),
                     "frame_count": frames,
@@ -227,6 +232,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "track_observations": observations,
                 "total_unique_people": len(unique_track_ids),
                 "reid_enabled": tracker.reid_enabled,
+                "tracker": tracker.name,
                 "average_timings_ms": {
                     "detection": detection_ms / frames,
                     "tracking": tracking_ms / frames,

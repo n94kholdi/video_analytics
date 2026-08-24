@@ -43,19 +43,20 @@ PROCESSING_METRICS = (
     MetricDefinition("progress", "Progress", unit="%", display="status", availability="live"),
     MetricDefinition("elapsed_seconds", "Elapsed time", unit="s", display="counter"),
 )
-DETECTION_METRICS = (
-    MetricDefinition("current_people", "Current people", display="counter"),
-    MetricDefinition("total_detections", "Total detections", aggregation="total", display="counter"),
-) + PROCESSING_METRICS
 TRACKING_METRICS = (
     MetricDefinition("current_people", "Current people", display="counter"),
-    MetricDefinition("total_unique_people", "Total unique people", aggregation="total", display="counter"),
-    MetricDefinition("active_tracks", "Active tracks", display="status"),
-    MetricDefinition("lost_tracks", "Lost tracks", aggregation="total", display="counter"),
+    MetricDefinition("active_tracker", "Active tracker", value_type="string", display="status"),
 ) + PROCESSING_METRICS
-COUNTING_METRICS = TRACKING_METRICS + (
-    MetricDefinition("entry_count", "Entries", aggregation="total", display="counter"),
-    MetricDefinition("exit_count", "Exits", aggregation="total", display="counter"),
+UNIQUE_PEOPLE_METRIC = MetricDefinition(
+    "total_unique_people",
+    "Unique people",
+    aggregation="total",
+    display="counter",
+)
+COUNTING_METRICS = (
+    TRACKING_METRICS[0],
+    UNIQUE_PEOPLE_METRIC,
+    *TRACKING_METRICS[1:],
     MetricDefinition("zone_occupancy", "Area occupancy", value_type="table", display="table"),
 )
 RESTRICTED_METRICS = (
@@ -64,13 +65,14 @@ RESTRICTED_METRICS = (
     MetricDefinition("restricted_exits", "Restricted-area exits", aggregation="total", display="counter"),
     MetricDefinition("restricted_violations", "Confirmed restricted-area alerts", aggregation="total", display="counter"),
 )
-QUEUE_METRICS = COUNTING_METRICS + (
-    MetricDefinition("queue_length", "Detected people queue", unit="people", display="chart"),
+QUEUE_STATUS_METRICS = (
+    MetricDefinition("queue_length", "People in the queue", unit="people", display="chart"),
     MetricDefinition("queue_wait_seconds", "Queue waiting time", unit="s", aggregation="average", display="chart"),
     MetricDefinition("queue_speed", "Queue movement speed", unit="px/s", aggregation="average", display="chart"),
     MetricDefinition("queue_details", "People and speed per configured queue", value_type="table", display="table"),
     MetricDefinition("average_person_speed", "Average person speed", unit="px/s", aggregation="average", display="chart"),
 )
+QUEUE_METRICS = COUNTING_METRICS + QUEUE_STATUS_METRICS
 CROWDED_REGION_METRIC = MetricDefinition(
     "top_crowded_regions",
     "Top crowded regions",
@@ -82,13 +84,6 @@ HEATMAP_METRICS = COUNTING_METRICS + (CROWDED_REGION_METRIC,)
 
 APPLICATIONS = (
     ApplicationPreset(
-        "detection",
-        "Human detection",
-        "Detect people and draw bounding boxes.",
-        "app.detection.cli",
-        metrics=DETECTION_METRICS,
-    ),
-    ApplicationPreset(
         "tracking",
         "People tracking",
         "Detect and track people with IDs and trajectories.",
@@ -98,7 +93,7 @@ APPLICATIONS = (
     ApplicationPreset(
         "people_counting",
         "People counting",
-        "Track people, report visible occupancy, and count configured line crossings.",
+        "Track people, report visible occupancy and unique people, and count configured line crossings.",
         "app.analytics.cli",
         metrics=COUNTING_METRICS,
     ),
@@ -129,35 +124,12 @@ APPLICATIONS = (
     ),
     ApplicationPreset(
         "configured_queue",
-        "Detected people queue",
-        "Measure queue length, overflow, waiting time, and progress in configured polygons.",
+        "Queue line monitoring",
+        "Count people inside a user-drawn queue polygon and estimate queue movement speed.",
         "app.analytics.cli",
         ("--enable-queue", "--queue-mode", "configured"),
         True,
-        QUEUE_METRICS,
-    ),
-    ApplicationPreset(
-        "full_analytics",
-        "Combined configured analytics",
-        "Run counting, restricted areas, heatmaps, configured queues, and speed together.",
-        "app.analytics.cli",
-        (
-            "--enable-restricted-area",
-            "--enable-heatmap",
-            "--enable-queue",
-            "--queue-mode",
-            "configured",
-        ),
-        True,
-        COUNTING_METRICS
-        + RESTRICTED_METRICS
-        + tuple(
-            metric
-            for metric in QUEUE_METRICS
-            if metric.key.startswith("queue_")
-            or metric.key == "average_person_speed"
-        )
-        + (CROWDED_REGION_METRIC,),
+        TRACKING_METRICS + QUEUE_STATUS_METRICS,
     ),
 )
 

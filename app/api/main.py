@@ -7,19 +7,33 @@ import json
 from pathlib import Path
 import re
 import shutil
+import asyncio
+import tempfile
 import time
 from typing import Annotated, Iterator
 from uuid import uuid4
 
+import cv2
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.api.frames import (
+    FrameCaptureError,
+    encode_jpeg_data_url,
+    grab_stream_frame,
+    iter_mjpeg_preview,
+    require_rtsp_url,
+)
 from app.api.jobs import JobManager
 from app.api.presets import APPLICATIONS, get_application
-from app.core.config import PROJECT_ROOT
+from app.core.config import DEFAULT_CAMERA_CONFIG_PATH, PROJECT_ROOT
 from app.geometry.config import load_camera_config
+from app.fleet.supervisor import fleet_supervisor
+from app.management.api import rollup_worker, router as management_router
+from app.management.repository import analytics_repository
+from app.tracking.factory import available_tracker_types, public_tracker_catalog
 
 
 JOBS_ROOT = Path(
@@ -56,6 +70,23 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+app.include_router(management_router)
+
+
+@app.on_event("startup")
+async def start_analytics_store() -> None:
+    analytics_repository.open()
+    app.state.analytics_rollup_task = asyncio.create_task(rollup_worker())
+    app.state.fleet_task = asyncio.create_task(asyncio.to_thread(fleet_supervisor.start))
+
+
+@app.on_event("shutdown")
+async def stop_analytics_store() -> None:
+    fleet_supervisor.stop()
+    task = getattr(app.state, "analytics_rollup_task", None)
+    if task is not None:
+        task.cancel()
+    analytics_repository.close()
 
 
 class StreamJobRequest(BaseModel):
@@ -70,14 +101,12 @@ class StreamJobRequest(BaseModel):
     camera_id: str = "live-camera"
     max_frames: int | None = Field(default=None, gt=0)
     enable_reid: bool = False
+    tracker_type: str = "bytetrack"
 
     @field_validator("stream_url")
     @classmethod
     def validate_stream_url(cls, value: str) -> str:
-        candidate = value.strip()
-        if not re.match(r"^rtsps?://[^/]+/.+", candidate, flags=re.IGNORECASE):
-            raise ValueError("stream_url must be an RTSP URL with a stream path")
-        return candidate
+        return require_rtsp_url(value)
 
     @field_validator("camera_id")
     @classmethod
@@ -88,17 +117,60 @@ class StreamJobRequest(BaseModel):
                 "camera_id must use 1-100 letters, digits, dots, underscores, or hyphens"
             )
         return candidate
-        return candidate
+
+
+    @field_validator("tracker_type")
+    @classmethod
+    def validate_tracker_type(cls, value: str) -> str:
+        selected = value.strip().lower()
+        allowed = available_tracker_types()
+        if selected not in allowed:
+            raise ValueError(f"tracker_type must be one of: {', '.join(allowed)}")
+        return selected
+
+
+class StreamFrameRequest(BaseModel):
+    """Capture a single still from the same RTSP source used by live jobs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stream_url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("stream_url")
+    @classmethod
+    def validate_stream_url(cls, value: str) -> str:
+        return require_rtsp_url(value)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, object]:
+    analytical_store = analytics_repository.health()
+    fleet = fleet_supervisor.status()
+    return {
+        "status": "ok" if analytical_store else "degraded",
+        "analyticsStore": analytical_store,
+        "fleet": {
+            "enabled": fleet["enabled"],
+            "fps": fleet["fps"],
+            "cameras": fleet["cameras"],
+            "running": fleet["running"],
+        },
+    }
+
+
+@app.get("/api/v1/fleet/status")
+def fleet_status() -> dict[str, object]:
+    return {"data": fleet_supervisor.status()}
 
 
 @app.get("/api/v1/applications")
 def applications() -> dict[str, list[dict[str, object]]]:
     return {"data": [item.public_dict() for item in APPLICATIONS]}
+
+
+@app.get("/api/v1/trackers")
+def trackers() -> dict[str, list[dict[str, object]]]:
+    return {"data": public_tracker_catalog()}
 
 
 @app.get("/api/v1/jobs")
@@ -164,6 +236,90 @@ def job_preview_stream(job_id: str) -> StreamingResponse:
     )
 
 
+@app.post("/api/v1/frames/first")
+async def extract_first_frame(video: Annotated[UploadFile, File(...)]) -> dict[str, object]:
+    """Decode the first frame of an uploaded video with OpenCV.
+
+    Used as a fallback when the browser's <video> element cannot preview a
+    file it will nonetheless accept for processing (e.g. some codecs inside
+    an otherwise-supported container).
+    """
+
+    video_suffix = Path(video.filename or "").suffix.lower()
+    if video_suffix not in ALLOWED_VIDEO_SUFFIXES:
+        raise HTTPException(status_code=422, detail="unsupported video file type")
+
+    JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(dir=JOBS_ROOT) as scratch_dir:
+            scratch_path = Path(scratch_dir) / f"source{video_suffix}"
+            try:
+                await _save_upload(video, scratch_path, limit=MAX_UPLOAD_BYTES)
+            finally:
+                await video.close()
+
+            capture = cv2.VideoCapture(str(scratch_path))
+            try:
+                if not capture.isOpened():
+                    raise HTTPException(status_code=422, detail="could not open video file")
+                ok, frame = capture.read()
+            finally:
+                capture.release()
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail=f"could not read video file: {exc}") from exc
+
+    if not ok or frame is None:
+        raise HTTPException(status_code=422, detail="could not read the first frame of this video")
+
+    try:
+        return {"data": encode_jpeg_data_url(frame)}
+    except FrameCaptureError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/frames/from-stream")
+def extract_stream_frame(request: StreamFrameRequest) -> dict[str, object]:
+    """Grab one still from a live RTSP camera for region drawing.
+
+    Live analytics already opens this same URL with OpenCV. The zone editor
+    only needs a single reference frame, not a browser WebRTC/HLS session.
+    """
+
+    try:
+        frame = grab_stream_frame(request.stream_url)
+        return {"data": encode_jpeg_data_url(frame)}
+    except FrameCaptureError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/preview-stream")
+def live_camera_preview(request: StreamFrameRequest) -> StreamingResponse:
+    """Stream an unannotated MJPEG view of the camera used by live analytics."""
+
+    try:
+        frames = iter_mjpeg_preview(request.stream_url)
+        first = next(frames)
+    except StopIteration as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="could not read a frame from the camera",
+        ) from exc
+    except FrameCaptureError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    def body() -> Iterator[bytes]:
+        yield first
+        yield from frames
+
+    return StreamingResponse(
+        body(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/v1/jobs", status_code=202)
 async def create_job(
     video: Annotated[UploadFile, File(...)],
@@ -171,6 +327,7 @@ async def create_job(
     camera_id: Annotated[str, Form()] = "uploaded-video",
     max_frames: Annotated[int | None, Form()] = None,
     enable_reid: Annotated[bool, Form()] = False,
+    tracker_type: Annotated[str, Form()] = "bytetrack",
     camera_config: Annotated[UploadFile | None, File()] = None,
     persist_camera_config: Annotated[bool, Form()] = True,
 ) -> dict[str, object]:
@@ -185,6 +342,12 @@ async def create_job(
         raise HTTPException(status_code=422, detail="max_frames must be positive")
     if enable_reid and preset.module == "app.detection.cli":
         raise HTTPException(status_code=422, detail="ReID is only available for tracking jobs")
+    selected_tracker = tracker_type.strip().lower()
+    if selected_tracker not in available_tracker_types():
+        raise HTTPException(
+            status_code=422,
+            detail=f"tracker_type must be one of: {', '.join(available_tracker_types())}",
+        )
     camera_id = camera_id.strip()
     if not camera_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", camera_id):
         raise HTTPException(
@@ -194,6 +357,21 @@ async def create_job(
     video_suffix = Path(video.filename or "").suffix.lower()
     if video_suffix not in ALLOWED_VIDEO_SUFFIXES:
         raise HTTPException(status_code=422, detail="unsupported recorded-video file type")
+    # Browsers submit an empty file part for an untouched <input type="file">,
+    # so an unset optional upload still arrives here with camera_config.filename == "".
+    if camera_config is not None and not (camera_config.filename or "").strip():
+        await camera_config.close()
+        camera_config = None
+    if (
+        preset.requires_camera_config
+        and camera_config is None
+        and not DEFAULT_CAMERA_CONFIG_PATH.exists()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{preset.name} requires a camera YAML configuration",
+        )
+
     job_id = uuid4().hex
     job_directory = manager.root / job_id
     job_directory.mkdir(parents=True)
@@ -206,7 +384,11 @@ async def create_job(
             if config_suffix not in {".yaml", ".yml"}:
                 raise HTTPException(status_code=422, detail="camera configuration must be YAML")
             config_path = job_directory / "camera.yaml"
-            await _save_upload(camera_config_upload, config_path, limit=2_000_000)
+            await _save_upload(camera_config, config_path, limit=2_000_000)
+        elif DEFAULT_CAMERA_CONFIG_PATH.exists():
+            config_path = job_directory / "camera.yaml"
+            shutil.copyfile(DEFAULT_CAMERA_CONFIG_PATH, config_path)
+        if config_path is not None:
             try:
                 load_camera_config(config_path)
             except (OSError, ValueError) as exc:
@@ -225,6 +407,7 @@ async def create_job(
             camera_config=config_path,
             max_frames=max_frames,
             enable_reid=enable_reid,
+            tracker_type=selected_tracker,
         )
     except Exception:
         shutil.rmtree(job_directory, ignore_errors=True)
@@ -367,6 +550,7 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
             camera_config=config_path,
             max_frames=request.max_frames,
             enable_reid=request.enable_reid,
+            tracker_type=request.tracker_type,
             source_type="rtsp",
             enabled_tasks=enabled_tasks,
         )

@@ -18,7 +18,28 @@ detector:
   iou_threshold: 0.70
 
 tracker:
+  type: bytetrack
   activation_threshold: 0.40
   lost_track_buffer: 30
   match_threshold: 0.30
   history_size: 90
+  bbd_threshold: 16.0
+  iou_threshold: 0.40
+  reid_high_threshold: 0.65
+  reid_low_threshold: 0.30
+  max_age_seconds: 8.0
+  use_visual_tracking: true
+  inertia: 0.20
+  w_association_emb: 0.75
+  alpha_fixed_emb: 0.95
+  aw_param: 0.50
+  delta_t_seconds: 2.0
+  use_cmc: false
+  proximity_thresh: 1.0
+  track_low_threshold: 0.10
+  new_track_threshold: 0.40
+  embedding_alpha: 0.90
+  # Optional per-camera geometry for UCMCTrack. Drop YAML or cam_para files
+  # in this directory; camera_id / filename stem must match the runtime id.
+  # Uncalibrated cameras keep working without a file.
+  # camera_geometry_dir: app/tracking/calibration/cameras

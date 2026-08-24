@@ -1,0 +1,12 @@
+tracker:
+  type: stabletrack
+  activation_threshold: 0.40
+  lost_track_buffer: 4
+  match_threshold: 0.30
+  history_size: 90
+  bbd_threshold: 16.0
+  iou_threshold: 0.40
+  reid_high_threshold: 0.65
+  reid_low_threshold: 0.30
+  max_age_seconds: 8.0
+  use_visual_tracking: true

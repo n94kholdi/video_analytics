@@ -12,8 +12,15 @@ from app.core.models import Event, TrackObservation
 from app.analytics.speed import queue_progress_speed
 from app.geometry.calibration import ImageToGroundProjector
 from app.geometry.config import CameraConfig, QueueRegion
-from app.geometry.primitives import point_in_polygon
+from app.geometry.primitives import bbox_polygon_coverage_ratio, point_in_polygon
 from app.storage import EventSink
+
+MINIMUM_BBOX_COVERAGE_RATIO = 0.75
+"""Fraction of a person's bbox area that must overlap a queue to count as inside.
+
+Foot-point containment alone is too easy to satisfy at a region's edge; this
+also requires most of the person's bbox to actually be inside the polygon.
+"""
 
 
 class QueueTrackState(str, Enum):
@@ -225,7 +232,13 @@ class QueueAnalyzer:
                 progress, progress_metres = self._progress_speeds(
                     config, queue, observation
                 )
-                qualifies = point_in_polygon(observation.foot_point, polygon) and (
+                within_region = point_in_polygon(
+                    observation.foot_point, polygon
+                ) and (
+                    bbox_polygon_coverage_ratio(observation.xyxy, polygon)
+                    >= MINIMUM_BBOX_COVERAGE_RATIO - 1e-9
+                )
+                qualifies = within_region and (
                     speed is None
                     or speed <= queue.maximum_speed_pixels_per_second + 1e-9
                 )
@@ -249,9 +262,7 @@ class QueueAnalyzer:
                         event_time,
                         observation.foot_point,
                         reason=(
-                            "outside_polygon"
-                            if not point_in_polygon(observation.foot_point, polygon)
-                            else "speed_exceeded"
+                            "outside_polygon" if not within_region else "speed_exceeded"
                         ),
                     )
                     if left is not None:

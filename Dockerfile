@@ -13,15 +13,22 @@ RUN apt-get update \
     && apt-get install --no-install-recommends --yes ffmpeg libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Only files that declare dependencies go in before `pip install`, so
+# editing app/ or configs/ below can't invalidate this layer and force
+# every package to be re-downloaded on rebuild.
 COPY pyproject.toml README.md ./
-COPY app ./app
-COPY configs ./configs
+RUN python -m pip install --no-cache-dir ".[api]"
+
+# Model weights change far less often than app code; copying them
+# before the source keeps this layer cached across code-only rebuilds.
 COPY All_weights/Weights_final/HumanDetection_light_input_640.onnx ./All_weights/Weights_final/HumanDetection_light_input_640.onnx
 COPY All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx ./All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx
 
-RUN python -m pip install --no-cache-dir ".[api]" \
-    && useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/output/dashboard /app/outputs \
+COPY app ./app
+COPY configs ./configs
+
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/output/dashboard /app/output/outbox /app/outputs \
     && chown -R appuser:appuser /app/output /app/outputs
 
 USER appuser

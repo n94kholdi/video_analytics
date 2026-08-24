@@ -86,6 +86,84 @@ def point_in_polygon(
     return inside
 
 
+def polygon_area(polygon: Sequence[Point]) -> float:
+    """Return the unsigned shoelace area of a (possibly degenerate) polygon."""
+
+    if len(polygon) < 3:
+        return 0.0
+    count = len(polygon)
+    twice_area = sum(
+        polygon[index][0] * polygon[(index + 1) % count][1]
+        - polygon[(index + 1) % count][0] * polygon[index][1]
+        for index in range(count)
+    )
+    return abs(twice_area) / 2.0
+
+
+def clip_polygon_to_bbox(
+    polygon: Sequence[Point], bbox: tuple[float, float, float, float]
+) -> list[Point]:
+    """Sutherland-Hodgman clip of a simple polygon against an axis-aligned box.
+
+    The clip window is convex, so this holds for arbitrary (including
+    non-convex) simple subject polygons.
+    """
+
+    x1, y1, x2, y2 = bbox
+    left, right = min(x1, x2), max(x1, x2)
+    top, bottom = min(y1, y2), max(y1, y2)
+
+    def clip_edge(points: list[Point], inside, intersect) -> list[Point]:
+        if not points:
+            return []
+        output: list[Point] = []
+        previous = points[-1]
+        previous_inside = inside(previous)
+        for current in points:
+            current_inside = inside(current)
+            if current_inside:
+                if not previous_inside:
+                    output.append(intersect(previous, current))
+                output.append(current)
+            elif previous_inside:
+                output.append(intersect(previous, current))
+            previous, previous_inside = current, current_inside
+        return output
+
+    def intersect_vertical(a: Point, b: Point, x: float) -> Point:
+        t = (x - a[0]) / (b[0] - a[0])
+        return (x, a[1] + t * (b[1] - a[1]))
+
+    def intersect_horizontal(a: Point, b: Point, y: float) -> Point:
+        t = (y - a[1]) / (b[1] - a[1])
+        return (a[0] + t * (b[0] - a[0]), y)
+
+    points = list(polygon)
+    points = clip_edge(points, lambda p: p[0] >= left, lambda a, b: intersect_vertical(a, b, left))
+    points = clip_edge(points, lambda p: p[0] <= right, lambda a, b: intersect_vertical(a, b, right))
+    points = clip_edge(points, lambda p: p[1] >= top, lambda a, b: intersect_horizontal(a, b, top))
+    points = clip_edge(points, lambda p: p[1] <= bottom, lambda a, b: intersect_horizontal(a, b, bottom))
+    return points
+
+
+def bbox_polygon_coverage_ratio(
+    bbox: tuple[float, float, float, float], polygon: Sequence[Point]
+) -> float:
+    """Return the fraction of a bbox's area that overlaps a polygon.
+
+    This is intersection-over-bbox-area (not intersection-over-union): a
+    region polygon is typically much larger than one person's bbox, so
+    union-based IoU would rarely be usable as a membership threshold.
+    """
+
+    x1, y1, x2, y2 = bbox
+    bbox_area = abs(x2 - x1) * abs(y2 - y1)
+    if bbox_area <= 0:
+        return 0.0
+    clipped = clip_polygon_to_bbox(polygon, bbox)
+    return polygon_area(clipped) / bbox_area
+
+
 def validate_polygon(
     polygon: Sequence[Point], *, epsilon: float = _EPSILON
 ) -> None:

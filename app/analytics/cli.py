@@ -11,6 +11,7 @@ from time import perf_counter
 from typing import Sequence
 
 import cv2
+import numpy as np
 
 from app.api.live import (
     LiveReporter,
@@ -40,7 +41,7 @@ from app.analytics.speed import CameraSpeedConfig, SpeedEstimator
 from app.analytics.vertical_queue import VerticalQueueAnalyzer, VerticalQueueConfig
 from app.analytics.vertical_queue_visualization import annotate_vertical_queues
 from app.analytics.visualization import annotate_people_counts
-from app.core.config import ConfigError, load_settings
+from app.core.config import ConfigError, DEFAULT_CAMERA_CONFIG_PATH, load_settings
 from app.core.video_source import resolve_video_source, video_source_stem
 from app.detection.onnx_detector import OnnxPersonDetector
 from app.geometry.config import (
@@ -50,8 +51,11 @@ from app.geometry.config import (
     load_camera_config,
 )
 from app.storage import JsonlEventSink
-from app.tracking.bytetrack import ByteTrackAdapter
+from app.management.publisher import MinutePublisher
+from app.tracking.factory import create_tracker, public_tracker_catalog
 from app.tracking.visualization import annotate_tracks
+
+DEFAULT_CAMERA_CONFIG = DEFAULT_CAMERA_CONFIG_PATH
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,7 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--camera-config",
         type=Path,
-        help="camera YAML with occupancy polygons; defaults to the whole frame",
+        default=DEFAULT_CAMERA_CONFIG if DEFAULT_CAMERA_CONFIG.exists() else None,
+        help=(
+            "camera YAML with occupancy polygons; defaults to "
+            "configs/cameras/example_lobby.yaml"
+        ),
     )
     parser.add_argument("--config", type=Path, help="application YAML configuration")
     parser.add_argument("--model", type=Path, help="override detector model path")
@@ -70,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-reid",
         action="store_true",
         help="enable higher-cost OSNet appearance re-identification",
+    )
+    parser.add_argument(
+        "--tracker",
+        choices=tuple(item["type"] for item in public_tracker_catalog()),
+        help="tracker type (default: configuration tracker.type)",
     )
     parser.add_argument("--reid-model", type=Path, help="override OSNet ReID model path")
     parser.add_argument("--output", type=Path, help="annotated MP4 path")
@@ -133,7 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-trajectories",
         action="store_true",
-        help="hide track trails in the annotated video",
+        help="deprecated: people-counting video never draws track trails",
     )
     return parser
 
@@ -228,7 +241,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         iou_threshold=settings.detector_iou_threshold,
         providers=settings.onnx_providers,
     )
-    tracker = ByteTrackAdapter(
+    tracker = create_tracker(
+        args.tracker,
+        settings=settings,
         activation_threshold=settings.tracker_activation_threshold,
         lost_track_buffer=settings.tracker_lost_track_buffer,
         match_threshold=settings.tracker_match_threshold,
@@ -242,6 +257,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.live_dir,
         args.job_id,
         total_frames=processed_frame_count(capture, args.max_frames, args.frame_stride),
+    )
+    aggregate_publisher = MinutePublisher(
+        camera_counting.camera_id,
+        camera_config.name if camera_config is not None else camera_counting.camera_id,
     )
     counter = PeopleCounter((camera_counting,))
     restricted = (
@@ -500,7 +519,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                     frame,
                     observations,
                     tracking_ms=tracked.tracking_ms,
-                    show_trajectories=not args.no_trajectories,
+                    show_trajectories=False,
+                    tracker_name=tracker.name,
                 )
                 counted_frame = annotate_people_counts(
                     annotated,
@@ -687,6 +707,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "current_people": confirmed_humans,
                     "total_unique_people": snapshot.total_unique_people,
                     "active_tracks": len(observations),
+                    "active_tracker": tracker.name,
                     "lost_tracks": lost_tracks,
                     "entry_count": snapshot.cumulative_entries,
                     "exit_count": snapshot.cumulative_exits,
@@ -703,6 +724,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "queue_details": {
                         item.queue_id: {
                             "people": item.raw_count,
+                            "current_wait_seconds": item.approximate_current_waiting_seconds,
+                            "completed_wait_count": item.completed_wait_count,
+                            "last_completed_wait_seconds": item.last_completed_waiting_seconds,
+                            "overflow": item.overflow,
                             "average_speed_pixels_per_second": item.average_speed_pixels_per_second,
                             "average_speed_metres_per_second": item.average_speed_metres_per_second,
                         }
@@ -721,7 +746,19 @@ def main(argv: Sequence[str] | None = None) -> None:
                         if heatmaps is not None
                         else None
                     ),
+                    "management_spatial_layers": (
+                        _management_spatial_layers(heatmap_snapshot.ground.occupancy, heatmap_snapshot.ground.dwell_seconds)
+                        if heatmaps is not None and heatmap_snapshot.ground is not None
+                        and frames % max(1, round(output_fps * 900)) == 0
+                        else None
+                    ),
                 }
+                aggregate_events = list(counted.events)
+                if intrusion is not None:
+                    aggregate_events.extend(intrusion.events)
+                if queue_result is not None:
+                    aggregate_events.extend(queue_result.events)
+                aggregate_publisher.observe(live_metrics, aggregate_events)
                 preview_frame = final_frame
                 if heatmaps is not None:
                     preview_frame = overlay_heatmap(
@@ -743,6 +780,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     )
                 reporter.publish(frames - 1, live_metrics, frame=preview_frame)
     finally:
+        aggregate_publisher.close()
         capture.release()
         writer.release()
         if heatmap_video_writer is not None:
@@ -803,6 +841,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "maximum_confirmed_humans": maximum_confirmed,
                 "total_unique_people": snapshot.total_unique_people,
                 "reid_enabled": tracker.reid_enabled,
+                "tracker": tracker.name,
                 "maximum_total_zone_occupancy": maximum_occupancy,
                 "line_crossed_events": events,
                 "restricted_area_enabled": restricted is not None,
@@ -903,6 +942,35 @@ def _crowded_regions(regions: Sequence[CrowdedRegion]) -> list[dict[str, object]
         }
         for region in regions
     ]
+
+
+def _management_spatial_layers(occupancy: np.ndarray, dwell_seconds: np.ndarray) -> dict[str, list[dict[str, float]]]:
+    """Downsample full heatmaps to a bounded management grid every 15 minutes."""
+
+    occupancy_points = _management_grid_points(occupancy)
+    dwell_points = _management_grid_points(dwell_seconds / 60.0)
+    maximum = max((point["value"] for point in occupancy_points), default=1.0) or 1.0
+    congestion = [{**point, "value": point["value"] * 100 / maximum, "intensity": point["value"] / maximum} for point in occupancy_points]
+    return {
+        "occupancy": occupancy_points,
+        "dwell": dwell_points,
+        "traffic": occupancy_points,
+        "congestion": congestion,
+    }
+
+
+def _management_grid_points(values: np.ndarray) -> list[dict[str, float]]:
+    rows, columns = values.shape
+    points: list[dict[str, float]] = []
+    maximum = float(np.max(values)) if values.size else 0.0
+    for row in range(3):
+        y1, y2 = round(row * rows / 3), round((row + 1) * rows / 3)
+        for column in range(4):
+            x1, x2 = round(column * columns / 4), round((column + 1) * columns / 4)
+            value = float(np.mean(values[y1:y2, x1:x2])) if y2 > y1 and x2 > x1 else 0.0
+            points.append({"x": (column + .5) * 25, "y": (row + .5) * 100 / 3,
+                           "value": value, "intensity": value / maximum if maximum > 0 else 0.0})
+    return points
 
 
 if __name__ == "__main__":

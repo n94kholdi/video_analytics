@@ -44,6 +44,14 @@ def test_reid_is_explicitly_opt_in() -> None:
     assert build_parser().parse_args(["input.mp4", "--enable-reid"]).enable_reid is True
 
 
+def test_tracker_cli_accepts_registered_types() -> None:
+    assert build_parser().parse_args(["input.mp4"]).tracker is None
+    assert build_parser().parse_args(["input.mp4", "--tracker", "stabletrack"]).tracker == "stabletrack"
+    assert build_parser().parse_args(["input.mp4", "--tracker", "deepocsort"]).tracker == "deepocsort"
+    assert build_parser().parse_args(["input.mp4", "--tracker", "botsort"]).tracker == "botsort"
+    assert build_parser().parse_args(["input.mp4", "--tracker", "ucmctrack"]).tracker == "ucmctrack"
+
+
 def test_trajectory_line_can_be_hidden_without_hiding_track_annotation() -> None:
     frame = np.zeros((80, 80, 3), dtype=np.uint8)
     item = observation()
@@ -55,3 +63,27 @@ def test_trajectory_line_can_be_hidden_without_hiding_track_annotation() -> None
     assert np.all(hidden[20, 30] == 0)
     # The bounding box remains visible in both modes.
     assert np.any(hidden[10, 45] != 0)
+
+
+def test_trajectory_line_keeps_only_the_last_few_seconds() -> None:
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    item = TrackObservation(
+        camera_id="cam",
+        track_id=1,
+        timestamp=10.0,
+        frame_index=2,
+        xyxy=(45.0, 10.0, 55.0, 20.0),
+        foot_point=(50.0, 20.0),
+        detection_confidence=0.9,
+        confirmed=True,
+        trajectory=(
+            TrajectoryPoint(0.0, 0, (10.0, 20.0), (10.0, 20.0)),
+            TrajectoryPoint(10.0, 2, (50.0, 20.0), (50.0, 20.0)),
+        ),
+    )
+
+    annotated = annotate_tracks(frame, [item], show_trajectories=True, max_trail_seconds=4.0)
+
+    assert np.all(annotated[20, 10] == 0)
+    assert np.all(annotated[20, 30] == 0)
+    assert np.any(annotated[10, 45] != 0)

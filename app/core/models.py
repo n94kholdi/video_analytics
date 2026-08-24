@@ -50,6 +50,7 @@ class TrackObservation:
     detection_confidence: float
     confirmed: bool
     trajectory: tuple[TrajectoryPoint, ...]
+    class_id: int = 0
     ground_position: tuple[float, float] | None = None
     smoothed_velocity: tuple[float, float] | None = None
     speed_pixels_per_second: float | None = None

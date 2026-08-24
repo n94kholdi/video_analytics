@@ -12,9 +12,22 @@ services:
       VIDEO_ANALYTICS_MAX_UPLOAD_BYTES: "${VIDEO_ANALYTICS_MAX_UPLOAD_BYTES:-1073741824}"
       VIDEO_ANALYTICS_PROCESSING_WIDTH: "${VIDEO_ANALYTICS_PROCESSING_WIDTH:-1280}"
       VIDEO_ANALYTICS_FRAME_STRIDE: "${VIDEO_ANALYTICS_FRAME_STRIDE:-10}"
+      VIDEO_ANALYTICS_FLEET_ENABLED: "${VIDEO_ANALYTICS_FLEET_ENABLED:-false}"
+      VIDEO_ANALYTICS_FLEET_FPS: "0.5"
+      VIDEO_ANALYTICS_TRACKER: "${VIDEO_ANALYTICS_TRACKER:-stabletrack}"
+      MEDIAMTX_RTSP_URL: "${MEDIAMTX_RTSP_URL:-rtsp://host.docker.internal:8554}"
+      ANALYTICS_DATABASE_URL: "${ANALYTICS_DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/tarebar}"
+      ANALYTICS_READ_KEY: "${ANALYTICS_READ_KEY:-local-read-key-change-me}"
+      ANALYTICS_INGEST_KEY: "${ANALYTICS_INGEST_KEY:-local-ingest-key-change-me}"
+      VIDEO_ANALYTICS_INGEST_URL: "http://127.0.0.1:8000/api/v1/ingest/minutes"
+      ANALYTICS_OUTBOX_DIR: "/app/output/outbox"
     volumes:
       - analytics-jobs:/app/output/dashboard
+      - analytics-outbox:/app/output/outbox
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:
   analytics-jobs:
+  analytics-outbox:
