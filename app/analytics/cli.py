@@ -52,7 +52,7 @@ from app.geometry.config import (
 )
 from app.storage import JsonlEventSink
 from app.management.publisher import MinutePublisher
-from app.tracking.bytetrack import ByteTrackAdapter
+from app.tracking.factory import create_tracker, public_tracker_catalog
 from app.tracking.visualization import annotate_tracks
 
 DEFAULT_CAMERA_CONFIG = DEFAULT_CAMERA_CONFIG_PATH
@@ -78,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-reid",
         action="store_true",
         help="enable higher-cost OSNet appearance re-identification",
+    )
+    parser.add_argument(
+        "--tracker",
+        choices=tuple(item["type"] for item in public_tracker_catalog()),
+        help="tracker type (default: configuration tracker.type)",
     )
     parser.add_argument("--reid-model", type=Path, help="override OSNet ReID model path")
     parser.add_argument("--output", type=Path, help="annotated MP4 path")
@@ -141,7 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-trajectories",
         action="store_true",
-        help="hide track trails in the annotated video",
+        help="deprecated: people-counting video never draws track trails",
     )
     return parser
 
@@ -236,7 +241,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         iou_threshold=settings.detector_iou_threshold,
         providers=settings.onnx_providers,
     )
-    tracker = ByteTrackAdapter(
+    tracker = create_tracker(
+        args.tracker,
+        settings=settings,
         activation_threshold=settings.tracker_activation_threshold,
         lost_track_buffer=settings.tracker_lost_track_buffer,
         match_threshold=settings.tracker_match_threshold,
@@ -512,7 +519,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                     frame,
                     observations,
                     tracking_ms=tracked.tracking_ms,
-                    show_trajectories=not args.no_trajectories,
+                    show_trajectories=False,
+                    tracker_name=tracker.name,
                 )
                 counted_frame = annotate_people_counts(
                     annotated,
@@ -699,6 +707,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "current_people": confirmed_humans,
                     "total_unique_people": snapshot.total_unique_people,
                     "active_tracks": len(observations),
+                    "active_tracker": tracker.name,
                     "lost_tracks": lost_tracks,
                     "entry_count": snapshot.cumulative_entries,
                     "exit_count": snapshot.cumulative_exits,
@@ -832,6 +841,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "maximum_confirmed_humans": maximum_confirmed,
                 "total_unique_people": snapshot.total_unique_people,
                 "reid_enabled": tracker.reid_enabled,
+                "tracker": tracker.name,
                 "maximum_total_zone_occupancy": maximum_occupancy,
                 "line_crossed_events": events,
                 "restricted_area_enabled": restricted is not None,

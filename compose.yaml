@@ -14,6 +14,7 @@ services:
       VIDEO_ANALYTICS_FRAME_STRIDE: "${VIDEO_ANALYTICS_FRAME_STRIDE:-10}"
       VIDEO_ANALYTICS_FLEET_ENABLED: "${VIDEO_ANALYTICS_FLEET_ENABLED:-false}"
       VIDEO_ANALYTICS_FLEET_FPS: "0.5"
+      VIDEO_ANALYTICS_TRACKER: "${VIDEO_ANALYTICS_TRACKER:-stabletrack}"
       MEDIAMTX_RTSP_URL: "${MEDIAMTX_RTSP_URL:-rtsp://host.docker.internal:8554}"
       ANALYTICS_DATABASE_URL: "${ANALYTICS_DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/tarebar}"
       ANALYTICS_READ_KEY: "${ANALYTICS_READ_KEY:-local-read-key-change-me}"

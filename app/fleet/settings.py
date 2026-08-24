@@ -54,12 +54,16 @@ class FleetSettings:
     mediamtx_rtsp_url: str | None
     expected_samples_per_minute: int
     spatial_publish_seconds: float
+    tracker_type: str
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str] | None = None) -> "FleetSettings":
         environment = os.environ if environ is None else environ
         fps = min(FLEET_FPS, _positive_float(environment.get("VIDEO_ANALYTICS_FLEET_FPS"), FLEET_FPS))
         interval = 1.0 / fps
+        tracker_type = (environment.get("VIDEO_ANALYTICS_TRACKER") or "bytetrack").strip().lower()
+        if tracker_type not in {"bytetrack", "stabletrack", "deepocsort", "botsort", "ucmctrack"}:
+            tracker_type = "bytetrack"
         return cls(
             enabled=_flag(environment.get("VIDEO_ANALYTICS_FLEET_ENABLED"), False),
             fps=fps,
@@ -86,4 +90,5 @@ class FleetSettings:
             spatial_publish_seconds=_positive_float(
                 environment.get("VIDEO_ANALYTICS_SPATIAL_PUBLISH_SECONDS"), 30.0
             ),
+            tracker_type=tracker_type,
         )

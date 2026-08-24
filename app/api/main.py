@@ -33,6 +33,7 @@ from app.geometry.config import load_camera_config
 from app.fleet.supervisor import fleet_supervisor
 from app.management.api import rollup_worker, router as management_router
 from app.management.repository import analytics_repository
+from app.tracking.factory import available_tracker_types, public_tracker_catalog
 
 
 JOBS_ROOT = Path(
@@ -93,6 +94,7 @@ class StreamJobRequest(BaseModel):
     camera_id: str = "live-camera"
     max_frames: int | None = Field(default=None, gt=0)
     enable_reid: bool = False
+    tracker_type: str = "bytetrack"
 
     @field_validator("stream_url")
     @classmethod
@@ -108,6 +110,16 @@ class StreamJobRequest(BaseModel):
                 "camera_id must use 1-100 letters, digits, dots, underscores, or hyphens"
             )
         return candidate
+
+
+    @field_validator("tracker_type")
+    @classmethod
+    def validate_tracker_type(cls, value: str) -> str:
+        selected = value.strip().lower()
+        allowed = available_tracker_types()
+        if selected not in allowed:
+            raise ValueError(f"tracker_type must be one of: {', '.join(allowed)}")
+        return selected
 
 
 class StreamFrameRequest(BaseModel):
@@ -147,6 +159,11 @@ def fleet_status() -> dict[str, object]:
 @app.get("/api/v1/applications")
 def applications() -> dict[str, list[dict[str, object]]]:
     return {"data": [item.public_dict() for item in APPLICATIONS]}
+
+
+@app.get("/api/v1/trackers")
+def trackers() -> dict[str, list[dict[str, object]]]:
+    return {"data": public_tracker_catalog()}
 
 
 @app.get("/api/v1/jobs")
@@ -303,6 +320,7 @@ async def create_job(
     camera_id: Annotated[str, Form()] = "uploaded-video",
     max_frames: Annotated[int | None, Form()] = None,
     enable_reid: Annotated[bool, Form()] = False,
+    tracker_type: Annotated[str, Form()] = "bytetrack",
     camera_config: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, object]:
     try:
@@ -313,6 +331,12 @@ async def create_job(
         raise HTTPException(status_code=422, detail="max_frames must be positive")
     if enable_reid and preset.module == "app.detection.cli":
         raise HTTPException(status_code=422, detail="ReID is only available for tracking jobs")
+    selected_tracker = tracker_type.strip().lower()
+    if selected_tracker not in available_tracker_types():
+        raise HTTPException(
+            status_code=422,
+            detail=f"tracker_type must be one of: {', '.join(available_tracker_types())}",
+        )
     camera_id = camera_id.strip()
     if not camera_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", camera_id):
         raise HTTPException(
@@ -367,6 +391,7 @@ async def create_job(
             camera_config=config_path,
             max_frames=max_frames,
             enable_reid=enable_reid,
+            tracker_type=selected_tracker,
         )
     except Exception:
         shutil.rmtree(job_directory, ignore_errors=True)
@@ -461,6 +486,7 @@ def create_stream_job(request: StreamJobRequest) -> dict[str, object]:
             camera_config=config_path,
             max_frames=request.max_frames,
             enable_reid=request.enable_reid,
+            tracker_type=request.tracker_type,
             source_type="rtsp",
             enabled_tasks=enabled_tasks,
         )

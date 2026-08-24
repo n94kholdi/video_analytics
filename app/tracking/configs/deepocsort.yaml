@@ -1,0 +1,16 @@
+tracker:
+  type: deepocsort
+  activation_threshold: 0.40
+  lost_track_buffer: 4
+  match_threshold: 0.30
+  history_size: 90
+  iou_threshold: 0.30
+  reid_high_threshold: 0.65
+  reid_low_threshold: 0.30
+  max_age_seconds: 8.0
+  inertia: 0.20
+  w_association_emb: 0.75
+  alpha_fixed_emb: 0.95
+  aw_param: 0.50
+  delta_t_seconds: 2.0
+  use_cmc: false

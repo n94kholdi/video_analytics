@@ -77,6 +77,7 @@ def live_metrics(
     include_spatial_layers: bool,
     processing_fps: float,
     frame_count: int,
+    active_tracker: str | None = None,
 ) -> dict[str, object]:
     queue_lengths = [item.raw_count for item in queue_statuses]
     queue_waits = [
@@ -119,6 +120,7 @@ def live_metrics(
         else None,
         "processing_fps": processing_fps,
         "frame_count": frame_count,
+        "active_tracker": active_tracker,
         "top_crowded_regions": crowded_regions(crowded) if crowded else None,
         "management_spatial_layers": (
             management_spatial_layers(ground.occupancy, ground.dwell_seconds)

@@ -35,10 +35,14 @@ video-analytics-detect = "app.detection.cli:main"
 video-analytics-track = "app.tracking.cli:main"
 video-analytics-count = "app.analytics.cli:main"
 video-analytics-synthetic = "app.synthetic.cli:main"
+video-analytics-benchmark = "app.tracking.benchmark.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.tracking" = ["configs/*.yaml"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

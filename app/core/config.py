@@ -15,6 +15,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "configs" / "cameras" / "example_lobby.yaml"
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
 _ALLOWED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+_ALLOWED_TRACKERS = frozenset({"bytetrack", "stabletrack", "deepocsort", "botsort", "ucmctrack"})
 
 
 class ConfigError(ValueError):
@@ -37,6 +38,24 @@ class AppSettings:
     tracker_lost_track_buffer: int
     tracker_match_threshold: float
     tracker_history_size: int
+    tracker_type: str = "bytetrack"
+    tracker_bbd_threshold: float = 16.0
+    tracker_stable_iou_threshold: float = 0.4
+    tracker_reid_high_threshold: float = 0.65
+    tracker_reid_low_threshold: float = 0.3
+    tracker_max_age_seconds: float | None = None
+    tracker_use_visual_tracking: bool = True
+    tracker_inertia: float = 0.2
+    tracker_w_association_emb: float = 0.75
+    tracker_alpha_fixed_emb: float = 0.95
+    tracker_aw_param: float = 0.5
+    tracker_delta_t_seconds: float = 2.0
+    tracker_use_cmc: bool = False
+    tracker_proximity_thresh: float = 1.0
+    tracker_track_low_threshold: float = 0.1
+    tracker_new_track_threshold: float | None = None
+    tracker_embedding_alpha: float = 0.9
+    tracker_camera_geometry_dir: Path | None = None
     detector_model: Path | None = None
     reid_model: Path | None = None
 
@@ -128,6 +147,76 @@ class AppSettings:
             tracker.get("history_size"),
             "tracker.history_size",
         )
+        tracker_type = str(tracker.get("type") or "bytetrack").strip().lower()
+        if tracker_type not in _ALLOWED_TRACKERS:
+            allowed = ", ".join(sorted(_ALLOWED_TRACKERS))
+            raise ConfigError(f"tracker.type must be one of: {allowed}")
+        tracker_bbd_threshold = _positive_float(
+            tracker.get("bbd_threshold", 16.0),
+            "tracker.bbd_threshold",
+        )
+        tracker_stable_iou_threshold = _threshold(
+            tracker.get("iou_threshold", 0.4),
+            "tracker.iou_threshold",
+        )
+        tracker_reid_high_threshold = _threshold(
+            tracker.get("reid_high_threshold", 0.65),
+            "tracker.reid_high_threshold",
+        )
+        tracker_reid_low_threshold = _threshold(
+            tracker.get("reid_low_threshold", 0.3),
+            "tracker.reid_low_threshold",
+        )
+        max_age_value = tracker.get("max_age_seconds")
+        tracker_max_age_seconds = (
+            None
+            if max_age_value is None
+            else _positive_float(max_age_value, "tracker.max_age_seconds")
+        )
+        tracker_use_visual_tracking = _boolean(
+            tracker.get("use_visual_tracking", True),
+            "tracker.use_visual_tracking",
+        )
+        tracker_inertia = _threshold(tracker.get("inertia", 0.2), "tracker.inertia")
+        tracker_w_association_emb = _positive_float(
+            tracker.get("w_association_emb", 0.75),
+            "tracker.w_association_emb",
+        )
+        tracker_alpha_fixed_emb = _threshold(
+            tracker.get("alpha_fixed_emb", 0.95),
+            "tracker.alpha_fixed_emb",
+        )
+        tracker_aw_param = _threshold(tracker.get("aw_param", 0.5), "tracker.aw_param")
+        tracker_delta_t_seconds = _positive_float(
+            tracker.get("delta_t_seconds", 2.0),
+            "tracker.delta_t_seconds",
+        )
+        tracker_use_cmc = _boolean(tracker.get("use_cmc", False), "tracker.use_cmc")
+        tracker_proximity_thresh = _threshold(
+            tracker.get("proximity_thresh", 1.0),
+            "tracker.proximity_thresh",
+        )
+        tracker_track_low_threshold = _threshold(
+            tracker.get("track_low_threshold", 0.1),
+            "tracker.track_low_threshold",
+        )
+        new_track_value = tracker.get("new_track_threshold")
+        tracker_new_track_threshold = (
+            None
+            if new_track_value is None
+            else _threshold(new_track_value, "tracker.new_track_threshold")
+        )
+        tracker_embedding_alpha = _threshold(
+            tracker.get("embedding_alpha", 0.9),
+            "tracker.embedding_alpha",
+        )
+        geometry_dir_value = tracker.get("camera_geometry_dir")
+        tracker_camera_geometry_dir = None
+        if geometry_dir_value is not None:
+            tracker_camera_geometry_dir = _resolve_path(
+                _non_empty_string(geometry_dir_value, "tracker.camera_geometry_dir"),
+                base_dir,
+            )
 
         return cls(
             name=name,
@@ -142,6 +231,24 @@ class AppSettings:
             tracker_lost_track_buffer=tracker_lost_track_buffer,
             tracker_match_threshold=tracker_match_threshold,
             tracker_history_size=tracker_history_size,
+            tracker_type=tracker_type,
+            tracker_bbd_threshold=tracker_bbd_threshold,
+            tracker_stable_iou_threshold=tracker_stable_iou_threshold,
+            tracker_reid_high_threshold=tracker_reid_high_threshold,
+            tracker_reid_low_threshold=tracker_reid_low_threshold,
+            tracker_max_age_seconds=tracker_max_age_seconds,
+            tracker_use_visual_tracking=tracker_use_visual_tracking,
+            tracker_inertia=tracker_inertia,
+            tracker_w_association_emb=tracker_w_association_emb,
+            tracker_alpha_fixed_emb=tracker_alpha_fixed_emb,
+            tracker_aw_param=tracker_aw_param,
+            tracker_delta_t_seconds=tracker_delta_t_seconds,
+            tracker_use_cmc=tracker_use_cmc,
+            tracker_proximity_thresh=tracker_proximity_thresh,
+            tracker_track_low_threshold=tracker_track_low_threshold,
+            tracker_new_track_threshold=tracker_new_track_threshold,
+            tracker_embedding_alpha=tracker_embedding_alpha,
+            tracker_camera_geometry_dir=tracker_camera_geometry_dir,
             detector_model=detector_model,
             reid_model=reid_model,
         )
@@ -231,6 +338,13 @@ def _apply_environment_overrides(
         if value := environment.get(variable):
             updates[field_name] = _threshold(value, variable, label=label)
 
+    if value := environment.get("VIDEO_ANALYTICS_TRACKER"):
+        tracker_type = value.strip().lower()
+        if tracker_type not in _ALLOWED_TRACKERS:
+            allowed = ", ".join(sorted(_ALLOWED_TRACKERS))
+            raise ConfigError(f"VIDEO_ANALYTICS_TRACKER must be one of: {allowed}")
+        updates["tracker_type"] = tracker_type
+
     return replace(settings, **updates) if updates else settings
 
 
@@ -261,6 +375,24 @@ def _positive_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"{field_name} must be a positive integer")
     return value
+
+
+def _positive_float(value: Any, field_name: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{field_name} must be a positive number") from exc
+    if not result > 0:
+        raise ConfigError(f"{field_name} must be a positive number")
+    return result
+
+
+def _boolean(value: Any, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in {"true", "false", "1", "0", "yes", "no"}:
+        return value.strip().lower() in {"true", "1", "yes"}
+    raise ConfigError(f"{field_name} must be a boolean")
 
 
 def _resolve_path(value: str, base_dir: Path) -> Path:

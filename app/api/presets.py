@@ -45,8 +45,18 @@ PROCESSING_METRICS = (
 )
 TRACKING_METRICS = (
     MetricDefinition("current_people", "Current people", display="counter"),
+    MetricDefinition("active_tracker", "Active tracker", value_type="string", display="status"),
 ) + PROCESSING_METRICS
-COUNTING_METRICS = TRACKING_METRICS + (
+UNIQUE_PEOPLE_METRIC = MetricDefinition(
+    "total_unique_people",
+    "Unique people",
+    aggregation="total",
+    display="counter",
+)
+COUNTING_METRICS = (
+    TRACKING_METRICS[0],
+    UNIQUE_PEOPLE_METRIC,
+    *TRACKING_METRICS[1:],
     MetricDefinition("zone_occupancy", "Area occupancy", value_type="table", display="table"),
 )
 RESTRICTED_METRICS = (
@@ -83,7 +93,7 @@ APPLICATIONS = (
     ApplicationPreset(
         "people_counting",
         "People counting",
-        "Track people, report visible occupancy, and count configured line crossings.",
+        "Track people, report visible occupancy and unique people, and count configured line crossings.",
         "app.analytics.cli",
         metrics=COUNTING_METRICS,
     ),
