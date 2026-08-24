@@ -29,8 +29,10 @@ jobs:
 
       - name: Ensure ONNX model weights
         env:
-          WEIGHTS_ARCHIVE_URL: ${{ secrets.VIDEO_ANALYTICS_WEIGHTS_URL || 'https://github.com/n94kholdi/video_analytics/releases/download/v1.0-models/weights.tgz' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEIGHTS_RELEASE_TAG: v1.0-models
+          WEIGHTS_ARCHIVE: weights.tgz
+          WEIGHTS_ARCHIVE_URL: ${{ secrets.VIDEO_ANALYTICS_WEIGHTS_URL }}
         run: |
           set -euo pipefail
           dest="All_weights/Weights_final"
@@ -41,12 +43,19 @@ jobs:
             echo "Model weights present in the checkout."
             exit 0
           fi
-          echo "Downloading ONNX weights from ${WEIGHTS_ARCHIVE_URL}"
-          curl -fsSL \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            "$WEIGHTS_ARCHIVE_URL" -o /tmp/weights.tgz
-          tar -xzf /tmp/weights.tgz -C .
+          # Private repos 404 on /releases/download/ even with GITHUB_TOKEN.
+          # gh uses the GitHub API, which can read the same-repo release asset.
+          if [[ -n "${WEIGHTS_ARCHIVE_URL:-}" ]]; then
+            echo "Downloading ONNX weights from ${WEIGHTS_ARCHIVE_URL}"
+            curl -fsSL "$WEIGHTS_ARCHIVE_URL" -o "/tmp/${WEIGHTS_ARCHIVE}"
+          else
+            echo "Downloading ${WEIGHTS_ARCHIVE} from release ${WEIGHTS_RELEASE_TAG}"
+            gh release download "${WEIGHTS_RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${WEIGHTS_ARCHIVE}" \
+              --dir /tmp
+          fi
+          tar -xzf "/tmp/${WEIGHTS_ARCHIVE}" -C .
           test -f "$detector"
           test -f "$reid"
 
