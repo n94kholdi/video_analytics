@@ -338,9 +338,9 @@ from the deployment repository; they do not build from this source tree.
 ONNX weights are gitignored. Local builds need
 `All_weights/Weights_final/HumanDetection_light_input_640.onnx` and
 `All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx`. CI downloads
-`weights.tgz` from the `v1.0-models` GitHub Release when they are not in the
-checkout. Override that URL with the `VIDEO_ANALYTICS_WEIGHTS_URL` repository
-secret if needed.
+`weights.tgz` from the private `v1.0-models` GitHub Release (via `gh release
+download` and `GITHUB_TOKEN`) when they are not in the checkout. Override with
+the `VIDEO_ANALYTICS_WEIGHTS_URL` repository secret if needed.
 
 Load the default settings:
 
