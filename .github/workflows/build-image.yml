@@ -29,7 +29,8 @@ jobs:
 
       - name: Ensure ONNX model weights
         env:
-          WEIGHTS_ARCHIVE_URL: ${{ secrets.VIDEO_ANALYTICS_WEIGHTS_URL }}
+          WEIGHTS_ARCHIVE_URL: ${{ secrets.VIDEO_ANALYTICS_WEIGHTS_URL || 'https://github.com/n94kholdi/video_analytics/releases/download/v1.0-models/weights.tgz' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           dest="All_weights/Weights_final"
@@ -40,12 +41,11 @@ jobs:
             echo "Model weights present in the checkout."
             exit 0
           fi
-          if [[ -z "${WEIGHTS_ARCHIVE_URL:-}" ]]; then
-            echo "ONNX weights are not in git and VIDEO_ANALYTICS_WEIGHTS_URL is unset."
-            echo "Add the two runtime models to the build context or set that repository secret to a tar.gz of All_weights/Weights_final."
-            exit 1
-          fi
-          curl -fsSL "$WEIGHTS_ARCHIVE_URL" -o /tmp/weights.tgz
+          echo "Downloading ONNX weights from ${WEIGHTS_ARCHIVE_URL}"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "$WEIGHTS_ARCHIVE_URL" -o /tmp/weights.tgz
           tar -xzf /tmp/weights.tgz -C .
           test -f "$detector"
           test -f "$reid"
