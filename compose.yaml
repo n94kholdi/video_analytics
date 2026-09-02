@@ -1,3 +1,6 @@
+# Isolated API-only compose for this repository.
+# The full stack (frontend, postgres, MediaMTX, this service) is started from
+# Tarebar-Smart-Monitoring-Platform/docker-compose.dev.yml.
 services:
   api:
     build:

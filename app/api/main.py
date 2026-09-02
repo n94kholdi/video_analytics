@@ -39,6 +39,13 @@ from app.tracking.factory import available_tracker_types, public_tracker_catalog
 JOBS_ROOT = Path(
     os.environ.get("VIDEO_ANALYTICS_JOBS_DIR", PROJECT_ROOT / "output" / "dashboard")
 )
+DEFAULT_CAMERA_CONFIG_PATH = PROJECT_ROOT / "configs" / "cameras" / "example_lobby.yaml"
+SAVED_CAMERA_CONFIG_PATH = Path(
+    os.environ.get(
+        "VIDEO_ANALYTICS_CAMERA_CONFIG_PATH",
+        JOBS_ROOT / "_settings" / "camera.yaml",
+    )
+)
 MAX_UPLOAD_BYTES = int(os.environ.get("VIDEO_ANALYTICS_MAX_UPLOAD_BYTES", 1_073_741_824))
 ALLOWED_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"})
 manager = JobManager(
@@ -322,7 +329,11 @@ async def create_job(
     enable_reid: Annotated[bool, Form()] = False,
     tracker_type: Annotated[str, Form()] = "bytetrack",
     camera_config: Annotated[UploadFile | None, File()] = None,
+    persist_camera_config: Annotated[bool, Form()] = True,
 ) -> dict[str, object]:
+    camera_config_upload = (
+        camera_config if _has_camera_config_upload(camera_config) else None
+    )
     try:
         preset = get_application(application_id)
     except ValueError as exc:
@@ -368,8 +379,8 @@ async def create_job(
     config_path: Path | None = None
     try:
         await _save_upload(video, video_path, limit=MAX_UPLOAD_BYTES)
-        if camera_config is not None:
-            config_suffix = Path(camera_config.filename or "").suffix.lower()
+        if camera_config_upload is not None:
+            config_suffix = Path(camera_config_upload.filename or "").suffix.lower()
             if config_suffix not in {".yaml", ".yml"}:
                 raise HTTPException(status_code=422, detail="camera configuration must be YAML")
             config_path = job_directory / "camera.yaml"
@@ -382,6 +393,11 @@ async def create_job(
                 load_camera_config(config_path)
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=f"invalid camera YAML: {exc}") from exc
+            if persist_camera_config:
+                _save_default_camera_config(config_path)
+        elif preset.module == "app.analytics.cli":
+            config_path = job_directory / "camera.yaml"
+            _copy_default_camera_config(config_path)
         record = manager.register(
             job_id=job_id,
             application_id=application_id,
@@ -403,6 +419,54 @@ async def create_job(
 
     manager.enqueue(job_id)
     return {"data": manager.public_dict(record)}
+
+
+def _active_camera_config_path() -> Path:
+    """Return the saved camera YAML, falling back to the bundled lobby example."""
+
+    return (
+        SAVED_CAMERA_CONFIG_PATH
+        if SAVED_CAMERA_CONFIG_PATH.is_file()
+        else DEFAULT_CAMERA_CONFIG_PATH
+    )
+
+
+def _has_camera_config_upload(upload: UploadFile | None) -> bool:
+    """Ignore the empty multipart file part emitted by an unselected picker."""
+
+    return bool(
+        upload is not None
+        and (upload.filename or "").strip()
+        and upload.size != 0
+    )
+
+
+def _copy_default_camera_config(destination: Path) -> None:
+    source = _active_camera_config_path()
+    try:
+        load_camera_config(source)
+        shutil.copyfile(source, destination)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"default camera YAML is unavailable or invalid: {exc}",
+        ) from exc
+
+
+def _save_default_camera_config(source: Path) -> None:
+    """Atomically persist a validated upload for subsequent recorded jobs."""
+
+    SAVED_CAMERA_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SAVED_CAMERA_CONFIG_PATH.with_name(f".{uuid4().hex}.tmp")
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.replace(SAVED_CAMERA_CONFIG_PATH)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"could not save camera YAML as the default: {exc}",
+        ) from exc
 
 
 @app.post("/api/v1/stream-jobs", status_code=202)

@@ -272,9 +272,12 @@ OpenAPI documentation is available at `http://localhost:8000/docs`. Uploaded
 videos and generated artifacts from the dashboard are stored under
 `output/dashboard/<job-id>/`.
 The API exposes detection, tracking, counting, restricted-area, heatmap,
-vertical-queue, configured-queue, and combined-analysis presets. Applications
-that depend on configured polygons require a camera YAML upload; the other
-presets can run using only a recorded video.
+vertical-queue, configured-queue, and combined-analysis presets. Recorded-video
+analytics use `configs/cameras/example_lobby.yaml` when no camera YAML is
+uploaded. A validated YAML uploaded with a recorded job is persisted under the
+analytics jobs directory and becomes the default for later recorded jobs, so
+it only needs to be uploaded once. Set `VIDEO_ANALYTICS_CAMERA_CONFIG_PATH` to
+choose a different persistent path.
 
 Live RTSP sources use the same processing commands through
 `POST /api/v1/stream-jobs`. The JSON body accepts `stream_url`,
@@ -296,27 +299,48 @@ VIDEO_ANALYTICS_DETECTOR_MODEL=/absolute/path/to/model.onnx
 ### Run with Docker
 
 The Docker image includes the CPU runtime, FFmpeg, and the detector/ReID model
-files used by the API. Build and start it from this directory:
+files used by the API. This repository's `compose.yaml` runs only the API.
+The full Tarebar stack (frontend, PostgreSQL, MediaMTX, and this service)
+is started from the sibling frontend repository:
 
 ```bash
-docker-compose up --build -d
+cd ../Tarebar-Smart-Monitoring-Platform
+docker compose -f docker-compose.dev.yml --env-file .env.dev up --build
+```
+
+To run just this API:
+
+```bash
+docker compose up --build -d
 ```
 
 Port `8000` is used by default. If it is already occupied, choose another host
-port, for example `VIDEO_ANALYTICS_PORT=8001 docker-compose up --build -d`.
+port, for example `VIDEO_ANALYTICS_PORT=8001 docker compose up --build -d`.
 
 Check the service and open its API documentation:
 
 ```bash
 curl http://localhost:8000/health
-docker-compose logs -f api
+docker compose logs -f api
 ```
 
 The API is available at `http://localhost:8000`, and Swagger UI is at
 `http://localhost:8000/docs`. Job uploads and generated artifacts persist in
 the `analytics-jobs` Docker volume across container restarts. Stop the service
-with `docker-compose down`; add `--volumes` only when you also intend to delete
+with `docker compose down`; add `--volumes` only when you also intend to delete
 all persisted jobs.
+
+GitHub Actions (`.github/workflows/build-image.yml`) publishes
+`ghcr.io/<owner>/video-analytics:<git-sha>` and, on tags such as `v1.0.0`,
+`ghcr.io/<owner>/video-analytics:v1.0.0`. Production servers pull that image
+from the deployment repository; they do not build from this source tree.
+
+ONNX weights are gitignored. Local builds need
+`All_weights/Weights_final/HumanDetection_light_input_640.onnx` and
+`All_weights/Weights_final/Tracking_osnet_x0_25_msmt17.onnx`. CI downloads
+`weights.tgz` from the private `v1.0-models` GitHub Release (via `gh release
+download` and `GITHUB_TOKEN`) when they are not in the checkout. Override with
+the `VIDEO_ANALYTICS_WEIGHTS_URL` repository secret if needed.
 
 Load the default settings:
 
