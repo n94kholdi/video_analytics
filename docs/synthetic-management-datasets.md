@@ -50,23 +50,23 @@ into PostgreSQL. Then rebuild/start the dashboard stack so the read-only bind mo
 
 ```bash
 cd ../Tarebar-Smart-Monitoring-Platform
-docker compose up -d --build
+docker compose -f docker-compose.dev.yml --env-file .env.dev up -d --build
 ```
 
 ## Activate, switch, and disable
 
 ```bash
 # Activate one bundle
-docker compose exec video-analytics python -m app.synthetic.cli activate demo-golden
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec video-analytics python -m app.synthetic.cli activate demo-golden
 
 # Show active bundle
-docker compose exec video-analytics python -m app.synthetic.cli status
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec video-analytics python -m app.synthetic.cli status
 
 # Switch: activation removes the previous synthetic dataset first
-docker compose exec video-analytics python -m app.synthetic.cli activate demo-report
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec video-analytics python -m app.synthetic.cli activate demo-report
 
 # Disable all synthetic data
-docker compose exec video-analytics python -m app.synthetic.cli deactivate
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec video-analytics python -m app.synthetic.cli deactivate
 ```
 
 Only IDs beginning with the reserved `synthetic:` prefix are removed. Real locations, cameras,
@@ -88,13 +88,13 @@ the expected compact rate is roughly 33 camera-minute observations per second.
 
 ```bash
 # Production-equivalent compact rate
-docker compose exec video-analytics python -m app.synthetic.cli replay demo-scale \
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec video-analytics python -m app.synthetic.cli replay demo-scale \
   --rate 33 --batch-size 33 --key local-ingest-key-change-me
 
 # 2× and 3× capacity checks
-docker compose exec video-analytics python -m app.synthetic.cli replay demo-scale \
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec video-analytics python -m app.synthetic.cli replay demo-scale \
   --rate 67 --batch-size 67 --key local-ingest-key-change-me
-docker compose exec video-analytics python -m app.synthetic.cli replay demo-scale \
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec video-analytics python -m app.synthetic.cli replay demo-scale \
   --rate 100 --batch-size 100 --key local-ingest-key-change-me
 ```
 
