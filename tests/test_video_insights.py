@@ -179,16 +179,18 @@ def test_interpret_fruit_quality_uses_common_prompt(monkeypatch) -> None:
     assert prompts[0][0]["content"][-1]["text"] == FRUIT_QUALITY_PROMPT  # type: ignore[index]
 
 
-def test_interpret_fruit_quality_with_counting_evaluates_per_fruit_crops_and_merges(monkeypatch) -> None:
+def test_interpret_fruit_quality_with_counting_crops_region_once_and_scales_across_fruits(monkeypatch) -> None:
     service = VideoInsightService()
     fake_torch = type("FakeTorch", (), {"inference_mode": staticmethod(nullcontext)})
     monkeypatch.setattr(service, "_load", lambda: (object(), object(), fake_torch))
-    crop_scores = iter([92, 74, 40])
+    calls: list[dict[str, object]] = []
 
-    def fake_generate(*_args, **_kwargs):
-        score = next(crop_scores)
+    def fake_generate(*_args, **kwargs):
+        calls.append(kwargs)
         return (
-            f'{{"has_fruit":true,"label":"تازه","freshness_score":{score},"confidence":88,"note_fa":"میوه بررسی شد"}}',
+            '{"has_fruit":true,"label":"تازه","freshness_score":85,'
+            '"distribution":{"fresh":60,"middle":40,"rotten":0},'
+            '"fruit_count_estimate":3,"confidence":88,"summary_fa":"میوه‌های پالت تازه‌اند."}',
             0.4,
         )
 
@@ -217,27 +219,27 @@ def test_interpret_fruit_quality_with_counting_evaluates_per_fruit_crops_and_mer
         [frame],
         counting_result=counting_result,
         filter_outside_roi=False,
-        evaluate_per_fruit=True,
     )
-    assert result_all["quality_mode"] == "measured"
+    # Single Qwen call on the cropped region, never 3 separate per-fruit calls
+    assert len(calls) == 1
+    assert result_all["quality_mode"] == "estimated"
     assert result_all["counted_fruits_total"] == 3
     assert result_all["evaluated_fruits_count"] == 3
     assert [f["fruit_id"] for f in result_all["per_fruit_quality"]] == [1, 2, 3]
-    assert [f["freshness_score"] for f in result_all["per_fruit_quality"]] == [92, 74, 40]
-    assert result_all["freshness_score_mean"] == round((92 + 74 + 40) / 3, 2)
-    assert sum(result_all["distribution"].values()) == 100
+    assert result_all["roi_crop_thumbnail"].startswith("data:image/jpeg;base64,")
+    assert result_all["freshness_score_mean"] == 85.0
 
 
 def test_interpret_fruit_quality_with_roi_filtering_excludes_outside_fruits(monkeypatch) -> None:
     service = VideoInsightService()
     fake_torch = type("FakeTorch", (), {"inference_mode": staticmethod(nullcontext)})
     monkeypatch.setattr(service, "_load", lambda: (object(), object(), fake_torch))
-    crop_scores = iter([90, 82])
 
     def fake_generate(*_args, **_kwargs):
-        score = next(crop_scores)
         return (
-            f'{{"has_fruit":true,"label":"تازه","freshness_score":{score},"confidence":90,"note_fa":"سالم"}}',
+            '{"has_fruit":true,"label":"تازه","freshness_score":86,'
+            '"distribution":{"fresh":100,"middle":0,"rotten":0},'
+            '"fruit_count_estimate":2,"confidence":90,"summary_fa":"سالم"}',
             0.3,
         )
 
@@ -260,7 +262,6 @@ def test_interpret_fruit_quality_with_roi_filtering_excludes_outside_fruits(monk
         [np.zeros((200, 200, 3), dtype=np.uint8)],
         counting_result=counting_result,
         filter_outside_roi=True,
-        evaluate_per_fruit=True,
     )
     assert result["counted_fruits_total"] == 3
     assert result["evaluated_fruits_count"] == 2
@@ -268,10 +269,13 @@ def test_interpret_fruit_quality_with_roi_filtering_excludes_outside_fruits(monk
     assert result["freshness_score_mean"] == 86.0
 
 
-def test_estimated_per_fruit_scores_exact_weighted_average_matches_frame_score() -> None:
+def test_estimated_per_fruit_scores_scales_25_fruits_into_tiers_matching_frame_score() -> None:
     fruits = [{"fruit_id": i + 1, "box": [10, 10, 30, 30]} for i in range(25)]
     estimated = build_estimated_per_fruit_scores(85, fruits)
     assert len(estimated) == 25
     assert all(item["measurement_mode"] == "estimated" for item in estimated)
-    mean_score = sum(int(item["freshness_score"]) for item in estimated) / len(estimated)
+    scores = [int(item["freshness_score"]) for item in estimated]
+    assert scores.count(90) == 15
+    assert len(set(scores)) >= 2
+    mean_score = sum(scores) / len(scores)
     assert mean_score == 85.0

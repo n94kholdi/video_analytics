@@ -265,38 +265,125 @@ def _distribution_from_scores(scores: list[int | float]) -> dict[str, int]:
     return floored
 
 
+def _crop_pallet_region_rgb(
+    frame_rgb: np.ndarray,
+    pallet_polygon: list[list[float]],
+    padding_ratio: float = 0.03,
+) -> tuple[np.ndarray, list[int]]:
+    """Crop the frame to the selected pallet polygon's bounding box and mask outside pixels."""
+
+    h, w = frame_rgb.shape[:2]
+    if not pallet_polygon or len(pallet_polygon) < 3:
+        return frame_rgb, [0, 0, w, h]
+    pts = np.asarray(pallet_polygon, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        return frame_rgb, [0, 0, w, h]
+    min_x, min_y = float(pts[:, 0].min()), float(pts[:, 1].min())
+    max_x, max_y = float(pts[:, 0].max()), float(pts[:, 1].max())
+    bw = max(1.0, max_x - min_x)
+    bh = max(1.0, max_y - min_y)
+    pad_x = bw * padding_ratio
+    pad_y = bh * padding_ratio
+    x1 = max(0, int(np.floor(min_x - pad_x)))
+    y1 = max(0, int(np.floor(min_y - pad_y)))
+    x2 = min(w, int(np.ceil(max_x + pad_x)))
+    y2 = min(h, int(np.ceil(max_y + pad_y)))
+    if x2 <= x1 or y2 <= y1:
+        return frame_rgb, [0, 0, w, h]
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [np.round(pts).astype(np.int32)], 255)
+    masked_frame = frame_rgb.copy()
+    # Darken background outside the selected pallet polygon so Qwen only judges the selected region.
+    masked_frame[mask == 0] = (masked_frame[mask == 0] * 0.15).astype(np.uint8)
+    cropped = masked_frame[y1:y2, x1:x2].copy()
+    return cropped, [x1, y1, x2, y2]
+
+
+def _encode_rgb_thumbnail(image_rgb: np.ndarray, max_edge: int = 640) -> str | None:
+    """Encode an RGB crop as a JPEG data URL for UI preview of the cropped selected region."""
+
+    import base64
+
+    if image_rgb is None or not image_rgb.size:
+        return None
+    h, w = image_rgb.shape[:2]
+    scale = min(1.0, max_edge / max(h, w)) if max(h, w) > 0 else 1.0
+    resized = (
+        cv2.resize(
+            image_rgb,
+            (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+        if scale < 1.0
+        else image_rgb
+    )
+    bgr = cv2.cvtColor(resized, cv2.COLOR_RGB2BGR)
+    ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+    if not ok:
+        return None
+    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}"
+
+
 def build_estimated_per_fruit_scores(
     frame_score: int,
     fruits: list[dict[str, Any]],
+    distribution: dict[str, int] | None = None,
 ) -> list[dict[str, object]]:
-    """Build an explicitly labeled estimated per-fruit distribution whose exact average equals frame_score.
+    """Scale a single region quality score across the N detected fruits into realistic tiers.
 
-    Used only when per-crop evaluation is unavailable or skipped. Every fruit score
-    is marked measurement_mode='estimated', and the arithmetic mean across the
-    fruits equals frame_score (avoiding artificial mismatched averages).
+    For example, if the model returns 85% quality on a pallet with 25 detected fruits,
+    it scales the score across the 25 fruits into two tiers (e.g., 15 fruits at 90 and
+    10 fruits at 77/78, or weighted to frame_score) instead of running inference 25 times
+    or assigning an identical flat number to every fruit.
     """
 
     if not fruits:
         return []
     n = len(fruits)
-    target_sum = round(float(frame_score) * n)
-    base_score = target_sum // n
-    remainder = target_sum - (base_score * n)
+    s = max(0, min(100, int(round(frame_score))))
+
+    if n == 1 or s in (0, 100):
+        scores = [s] * n
+    else:
+        # Split the N detected fruits into a higher-quality tier (~60% of fruits, e.g. 15 of 25)
+        # and a secondary tier (~40% of fruits, e.g. 10 of 25) whose weighted average equals s.
+        if distribution and isinstance(distribution.get("fresh"), (int, float)) and 0 < distribution["fresh"] < 100:
+            n_high = max(1, min(n - 1, round(n * float(distribution["fresh"]) / 100.0)))
+        else:
+            n_high = max(1, min(n - 1, round(n * 0.6)))
+        n_low = n - n_high
+
+        delta_high = min(5, 100 - s)
+        if delta_high <= 0:
+            scores = [s] * n
+        else:
+            high_score = s + delta_high
+            target_total = s * n
+            remaining_total = target_total - (n_high * high_score)
+            low_base = max(0, min(100, remaining_total // n_low))
+            low_rem = max(0, remaining_total - (low_base * n_low))
+
+            scores = (
+                [high_score] * n_high
+                + [min(100, low_base + (1 if i < low_rem else 0)) for i in range(n_low)]
+            )
 
     items: list[dict[str, object]] = []
-    for idx, fruit in enumerate(fruits):
-        score = max(0, min(100, base_score + (1 if idx < remainder else 0)))
+    for idx, (fruit, score) in enumerate(zip(fruits, scores)):
         label = _label_for_score(score, True)
         items.append({
             "fruit_id": int(fruit.get("fruit_id", fruit.get("instance_id", idx + 1))),
             "box": [round(float(v), 2) for v in fruit.get("box", [0, 0, 0, 0])],
             "mask_polygon": fruit.get("mask_polygon"),
             "inside_pallet": bool(fruit.get("inside_pallet", True)),
-            "freshness_score": score,
+            "pallet_overlap": fruit.get("pallet_overlap"),
+            "freshness_score": int(score),
             "label": label,
             "grade": _grade_for_score(score, True),
             "confidence": None,
-            "note_fa": "امتیاز تخمینی بر پایه امتیاز کلی فریم",
+            "note_fa": f"تخمین مقیاس‌شده از امتیاز ناحیه پالت ({s} از ۱۰۰)",
             "measurement_mode": "estimated",
             "size": fruit.get("size"),
         })
@@ -561,7 +648,7 @@ class VideoInsightService:
         filter_outside_roi: bool = False,
         evaluate_per_fruit: bool = True,
     ) -> dict[str, object]:
-        """Evaluate quality for each detected fruit crop inside the selected area and merge by fruit_id."""
+        """Crop the selected pallet region from counting, run Qwen once on that region, and scale across detected fruits."""
 
         counting_frames = counting_result.get("frames")
         first_counting_frame = (
@@ -597,6 +684,9 @@ class VideoInsightService:
                 (int(image_width), int(image_height)),
                 interpolation=cv2.INTER_AREA,
             )
+
+        cropped_region_rgb, roi_crop_box = _crop_pallet_region_rgb(frame_rgb, pallet_polygon)
+        roi_crop_thumbnail = _encode_rgb_thumbnail(cropped_region_rgb)
 
         normalized_fruits: list[dict[str, Any]] = []
         for idx, item in enumerate(raw_fruits):
@@ -636,9 +726,11 @@ class VideoInsightService:
                 "evaluated_fruits_count": 0,
                 "confidence": 100,
                 "summary_fa": "هیچ میوه‌ای در ناحیه انتخاب‌شده برای ارزیابی کیفیت یافت نشد.",
-                "quality_mode": "measured" if evaluate_per_fruit else "estimated",
+                "quality_mode": "estimated",
                 "filter_outside_roi": filter_outside_roi,
                 "pallet_polygon": pallet_polygon,
+                "roi_crop_box": roi_crop_box,
+                "roi_crop_thumbnail": roi_crop_thumbnail,
                 "image_width": int(image_width),
                 "image_height": int(image_height),
                 "counting_job_id": counting_result.get("job_id"),
@@ -647,93 +739,60 @@ class VideoInsightService:
                 "inference_seconds": 0.0,
             }
 
-        model, processor, torch = self._load()
-        total_inference_seconds = 0.0
-        per_fruit_records: list[dict[str, object]] = []
-
-        if evaluate_per_fruit:
-            with self._inference_lock, torch.inference_mode():
-                for fruit in selected_fruits:
-                    crop_rgb = _crop_fruit_rgb(
-                        frame_rgb,
-                        fruit["box"],
-                        fruit.get("mask_polygon"),
-                    )
-                    if crop_rgb is None:
-                        continue
-                    content = [
-                        {"type": "image", "image": crop_rgb},
-                        {"type": "text", "text": PER_FRUIT_CROP_QUALITY_PROMPT},
-                    ]
-                    raw_output, elapsed = self._generate(
-                        model,
-                        processor,
-                        torch,
-                        [{"role": "user", "content": content}],
-                        images=[crop_rgb],
-                        max_new_tokens=140,
-                    )
-                    total_inference_seconds += elapsed
-                    crop_quality = _parse_single_fruit_crop_quality(raw_output)
-                    per_fruit_records.append({
-                        "fruit_id": fruit["fruit_id"],
-                        "box": fruit["box"],
-                        "mask_polygon": fruit.get("mask_polygon"),
-                        "inside_pallet": fruit["inside_pallet"],
-                        "pallet_overlap": fruit.get("pallet_overlap"),
-                        "freshness_score": int(crop_quality["freshness_score"]),
-                        "label": crop_quality["label"],
-                        "grade": crop_quality["grade"],
-                        "confidence": int(crop_quality["confidence"]),
-                        "note_fa": crop_quality["note_fa"],
-                        "measurement_mode": "measured",
-                        "size": fruit.get("size"),
-                    })
-
-            scores = [int(item["freshness_score"]) for item in per_fruit_records]
-            confidences = [
-                int(item["confidence"])
-                for item in per_fruit_records
-                if isinstance(item.get("confidence"), (int, float))
-            ]
-            mean_score = round(sum(scores) / len(scores)) if scores else 0
-            exact_mean = round(sum(scores) / len(scores), 2) if scores else 0.0
-            mean_conf = round(sum(confidences) / len(confidences)) if confidences else 85
-            distribution = _distribution_from_scores(scores)
-            overall_label = _label_for_score(exact_mean, bool(scores))
-            overall_grade = _grade_for_score(exact_mean, bool(scores))
-            summary_fa = (
-                f"کیفیت {len(per_fruit_records)} میوه شمارش‌شده به‌صورت تک‌به‌تک اندازه‌گیری شد؛ "
-                f"میانگین امتیاز تازگی {exact_mean} از ۱۰۰ ({overall_label}) است."
-            )
-            quality_mode = "measured"
-        else:
-            with self._inference_lock, torch.inference_mode():
-                content = [
-                    {"type": "image", "image": frame_rgb},
-                    {"type": "text", "text": FRUIT_QUALITY_PROMPT},
-                ]
-                raw_output, elapsed = self._generate(
-                    model,
-                    processor,
-                    torch,
-                    [{"role": "user", "content": content}],
-                    images=[frame_rgb],
-                    max_new_tokens=220,
+        # Crop each frame to the selected pallet region and run Qwen ONCE on the cropped region.
+        cropped_frames: list[np.ndarray] = []
+        for idx, raw_frame in enumerate(frames):
+            f_rgb = raw_frame
+            if (f_rgb.shape[1], f_rgb.shape[0]) != (int(image_width), int(image_height)):
+                f_rgb = cv2.resize(
+                    f_rgb,
+                    (int(image_width), int(image_height)),
+                    interpolation=cv2.INTER_AREA,
                 )
-                total_inference_seconds += elapsed
-            whole_parsed = _parse_fruit_quality(raw_output)
-            mean_score = int(whole_parsed["freshness_score"])
-            exact_mean = float(mean_score)
-            mean_conf = int(whole_parsed["confidence"])
-            distribution = dict(whole_parsed["distribution"])  # type: ignore[arg-type]
-            overall_label = str(whole_parsed["label"])
-            overall_grade = _grade_for_score(mean_score, True)
-            per_fruit_records = build_estimated_per_fruit_scores(mean_score, selected_fruits)
-            summary_fa = (
-                f"{whole_parsed['summary_fa']} (امتیاز تک‌میوه‌ها تخمینی و هم‌تراز با میانگین فریم است)."
+            crop_f, _ = _crop_pallet_region_rgb(f_rgb, pallet_polygon)
+            cropped_frames.append(crop_f)
+
+        model, processor, torch = self._load()
+        with self._inference_lock, torch.inference_mode():
+            content = [{"type": "image", "image": crop_f} for crop_f in cropped_frames]
+            content.append({"type": "text", "text": FRUIT_QUALITY_PROMPT})
+            raw_output, total_inference_seconds = self._generate(
+                model,
+                processor,
+                torch,
+                [{"role": "user", "content": content}],
+                images=cropped_frames,
+                max_new_tokens=220,
             )
-            quality_mode = "estimated"
+
+        whole_parsed = _parse_fruit_quality(raw_output)
+        region_score = int(whole_parsed["freshness_score"])
+        mean_conf = int(whole_parsed["confidence"])
+        model_distribution = dict(whole_parsed["distribution"])  # type: ignore[arg-type]
+        per_fruit_records = build_estimated_per_fruit_scores(
+            region_score,
+            selected_fruits,
+            distribution=model_distribution,
+        )
+        scores = [int(item["freshness_score"]) for item in per_fruit_records]
+        exact_mean = round(sum(scores) / len(scores), 2) if scores else float(region_score)
+        mean_score = round(exact_mean)
+        overall_label = str(whole_parsed["label"])
+        overall_grade = _grade_for_score(mean_score, True)
+
+        # Build a concise breakdown of scaled tiers (e.g., "15 میوه با امتیاز 90 و 10 میوه با امتیاز 78")
+        tier_counts: dict[int, int] = {}
+        for s_val in scores:
+            tier_counts[s_val] = tier_counts.get(s_val, 0) + 1
+        tier_parts = [
+            f"{count} میوه با امتیاز {score_val}"
+            for score_val, count in sorted(tier_counts.items(), key=lambda x: x[0], reverse=True)
+        ]
+        tier_text = " و ".join(tier_parts)
+        summary_fa = (
+            f"{whole_parsed['summary_fa']} "
+            f"(ارزیابی روی ناحیه برش‌خورده پالت انجام و بین {len(per_fruit_records)} میوه شمارش‌شده سرشکن شد: {tier_text}؛ میانگین وزنی: {exact_mean})."
+        )
 
         return {
             "has_fruit": True,
@@ -741,15 +800,17 @@ class VideoInsightService:
             "grade": overall_grade,
             "freshness_score": mean_score,
             "freshness_score_mean": exact_mean,
-            "distribution": distribution,
+            "distribution": model_distribution,
             "fruit_count_estimate": len(per_fruit_records),
             "counted_fruits_total": total_counted,
             "evaluated_fruits_count": len(per_fruit_records),
             "confidence": mean_conf,
             "summary_fa": summary_fa,
-            "quality_mode": quality_mode,
+            "quality_mode": "estimated",
             "filter_outside_roi": filter_outside_roi,
             "pallet_polygon": pallet_polygon,
+            "roi_crop_box": roi_crop_box,
+            "roi_crop_thumbnail": roi_crop_thumbnail,
             "image_width": int(image_width),
             "image_height": int(image_height),
             "counting_job_id": counting_result.get("job_id"),
