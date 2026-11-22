@@ -227,7 +227,8 @@ def test_interpret_fruit_quality_with_counting_crops_region_once_and_scales_acro
     assert result_all["evaluated_fruits_count"] == 3
     assert [f["fruit_id"] for f in result_all["per_fruit_quality"]] == [1, 2, 3]
     assert result_all["roi_crop_thumbnail"].startswith("data:image/jpeg;base64,")
-    assert result_all["freshness_score_mean"] == 85.0
+    assert result_all["freshness_score"] == 85
+    assert "سرشکن" not in result_all["summary_fa"]
 
 
 def test_interpret_fruit_quality_with_roi_filtering_excludes_outside_fruits(monkeypatch) -> None:
@@ -266,16 +267,25 @@ def test_interpret_fruit_quality_with_roi_filtering_excludes_outside_fruits(monk
     assert result["counted_fruits_total"] == 3
     assert result["evaluated_fruits_count"] == 2
     assert [f["fruit_id"] for f in result["per_fruit_quality"]] == [1, 2]
-    assert result["freshness_score_mean"] == 86.0
+    assert result["freshness_score"] == 86
 
 
-def test_estimated_per_fruit_scores_scales_25_fruits_into_tiers_matching_frame_score() -> None:
+def test_estimated_per_fruit_scores_scales_fruits_into_three_tiers_within_10_to_15_percent() -> None:
     fruits = [{"fruit_id": i + 1, "box": [10, 10, 30, 30]} for i in range(25)]
-    estimated = build_estimated_per_fruit_scores(85, fruits)
+    estimated = build_estimated_per_fruit_scores(85, fruits, distribution={"fresh": 90, "middle": 10, "rotten": 0})
     assert len(estimated) == 25
     assert all(item["measurement_mode"] == "estimated" for item in estimated)
     scores = [int(item["freshness_score"]) for item in estimated]
-    assert scores.count(90) == 15
-    assert len(set(scores)) >= 2
-    mean_score = sum(scores) / len(scores)
-    assert mean_score == 85.0
+    unique_tiers = sorted(set(scores), reverse=True)
+    assert len(unique_tiers) == 3
+    assert all(72 <= s <= 97 for s in scores)
+    assert abs((sum(scores) / len(scores)) - 85.0) <= 1.0
+
+    # Even with 361 fruits, produces exactly 3 tiers within 10-15% of 85%
+    large_lot = [{"fruit_id": i + 1, "box": [10, 10, 30, 30]} for i in range(361)]
+    estimated_large = build_estimated_per_fruit_scores(85, large_lot, distribution={"fresh": 90, "middle": 10, "rotten": 0})
+    large_scores = [int(item["freshness_score"]) for item in estimated_large]
+    assert len(set(large_scores)) == 3
+    assert min(large_scores) >= 72
+    assert max(large_scores) <= 97
+    assert abs((sum(large_scores) / len(large_scores)) - 85.0) <= 1.0

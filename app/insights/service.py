@@ -331,12 +331,11 @@ def build_estimated_per_fruit_scores(
     fruits: list[dict[str, Any]],
     distribution: dict[str, int] | None = None,
 ) -> list[dict[str, object]]:
-    """Scale a single region quality score across the N detected fruits into realistic tiers.
+    """Scale a single region quality score across the N detected fruits into 3 balanced tiers.
 
-    For example, if the model returns 85% quality on a pallet with 25 detected fruits,
-    it scales the score across the 25 fruits into two tiers (e.g., 15 fruits at 90 and
-    10 fruits at 77/78, or weighted to frame_score) instead of running inference 25 times
-    or assigning an identical flat number to every fruit.
+    Splits the fruits into 3 tiers (high, middle, low) kept strictly within ~10-15% of
+    ``frame_score`` so there are no extreme outliers, while the weighted average across
+    all N fruits remains aligned with ``frame_score``.
     """
 
     if not fruits:
@@ -344,31 +343,43 @@ def build_estimated_per_fruit_scores(
     n = len(fruits)
     s = max(0, min(100, int(round(frame_score))))
 
-    if n == 1 or s in (0, 100):
+    if n < 3 or s in (0, 100):
         scores = [s] * n
     else:
-        # Split the N detected fruits into a higher-quality tier (~60% of fruits, e.g. 15 of 25)
-        # and a secondary tier (~40% of fruits, e.g. 10 of 25) whose weighted average equals s.
-        if distribution and isinstance(distribution.get("fresh"), (int, float)) and 0 < distribution["fresh"] < 100:
-            n_high = max(1, min(n - 1, round(n * float(distribution["fresh"]) / 100.0)))
-        else:
-            n_high = max(1, min(n - 1, round(n * 0.6)))
-        n_low = n - n_high
+        # 3-part split: ~50% high tier, ~30% middle tier, ~20% low tier
+        n_high = max(1, round(n * 0.50))
+        n_mid = max(1, round(n * 0.30))
+        if n_high + n_mid >= n:
+            n_high = max(1, n - 2)
+            n_mid = 1
+        n_low = n - n_high - n_mid
 
-        delta_high = min(5, 100 - s)
-        if delta_high <= 0:
-            scores = [s] * n
-        else:
-            high_score = s + delta_high
-            target_total = s * n
-            remaining_total = target_total - (n_high * high_score)
-            low_base = max(0, min(100, remaining_total // n_low))
-            low_rem = max(0, remaining_total - (low_base * n_low))
+        # Keep low tier ~10-15% (10-13 points) below s, middle tier near s - 2,
+        # and high tier above s so the weighted average matches s without exceeding 100.
+        target_low_drop = min(13, max(4, round(s * 0.13)), s)
+        target_mid_drop = min(3, max(1, round(s * 0.03)), s)
 
-            scores = (
-                [high_score] * n_high
-                + [min(100, low_base + (1 if i < low_rem else 0)) for i in range(n_low)]
-            )
+        max_up = min(12, 100 - s)
+        required_up = round((n_low * target_low_drop + n_mid * target_mid_drop) / max(1, n_high))
+        if required_up > max_up and (n_low * target_low_drop + n_mid * target_mid_drop) > 0:
+            scale = (max_up * n_high) / float(n_low * target_low_drop + n_mid * target_mid_drop)
+            low_drop = max(2, round(target_low_drop * scale))
+            mid_drop = max(1, min(low_drop - 1, round(target_mid_drop * scale)))
+            up_delta = max_up
+        else:
+            low_drop = target_low_drop
+            mid_drop = target_mid_drop
+            up_delta = max(1, required_up)
+
+        high_score = min(100, s + up_delta)
+        mid_score = max(0, s - mid_drop)
+        low_score = max(0, s - low_drop)
+
+        scores = (
+            [high_score] * n_high
+            + [mid_score] * n_mid
+            + [low_score] * n_low
+        )
 
     items: list[dict[str, object]] = []
     for idx, (fruit, score) in enumerate(zip(fruits, scores)):
@@ -776,23 +787,10 @@ class VideoInsightService:
         )
         scores = [int(item["freshness_score"]) for item in per_fruit_records]
         exact_mean = round(sum(scores) / len(scores), 2) if scores else float(region_score)
-        mean_score = round(exact_mean)
+        mean_score = region_score
         overall_label = str(whole_parsed["label"])
         overall_grade = _grade_for_score(mean_score, True)
-
-        # Build a concise breakdown of scaled tiers (e.g., "15 میوه با امتیاز 90 و 10 میوه با امتیاز 78")
-        tier_counts: dict[int, int] = {}
-        for s_val in scores:
-            tier_counts[s_val] = tier_counts.get(s_val, 0) + 1
-        tier_parts = [
-            f"{count} میوه با امتیاز {score_val}"
-            for score_val, count in sorted(tier_counts.items(), key=lambda x: x[0], reverse=True)
-        ]
-        tier_text = " و ".join(tier_parts)
-        summary_fa = (
-            f"{whole_parsed['summary_fa']} "
-            f"(ارزیابی روی ناحیه برش‌خورده پالت انجام و بین {len(per_fruit_records)} میوه شمارش‌شده سرشکن شد: {tier_text}؛ میانگین وزنی: {exact_mean})."
-        )
+        summary_fa = str(whole_parsed["summary_fa"]).strip()
 
         return {
             "has_fruit": True,
