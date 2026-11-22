@@ -778,6 +778,7 @@ class VideoInsightService:
         if images is not None:
             processor_options["images"] = images
         inputs = processor(**processor_options).to(next(model.parameters()).device)
+        input_token_len = int(inputs.input_ids.shape[1])
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         started = time.perf_counter()
@@ -789,8 +790,11 @@ class VideoInsightService:
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - started
-        generated = output[:, inputs.input_ids.shape[1] :]
+        generated = output[:, input_token_len:]
         text = processor.batch_decode(
             generated, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0].strip()
+        del inputs, output, generated
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         return text, elapsed

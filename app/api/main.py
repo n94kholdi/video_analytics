@@ -48,6 +48,9 @@ SAVED_CAMERA_CONFIG_PATH = Path(
     )
 )
 MAX_UPLOAD_BYTES = int(os.environ.get("VIDEO_ANALYTICS_MAX_UPLOAD_BYTES", 1_073_741_824))
+VIDEO_INSIGHT_AUTO_RELEASE_GPU = os.environ.get(
+    "VIDEO_INSIGHT_AUTO_RELEASE_GPU", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
 ALLOWED_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"})
 ALLOWED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp"})
 manager = JobManager(
@@ -458,7 +461,7 @@ async def interpret_fruit_quality(
                 filter_outside_roi=filter_outside_roi,
                 evaluate_per_fruit=evaluate_per_fruit,
             )
-            if release_gpu_after:
+            if release_gpu_after or VIDEO_INSIGHT_AUTO_RELEASE_GPU:
                 await asyncio.to_thread(video_insight_service.unload)
     except VideoInsightError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -489,7 +492,7 @@ async def interpret_live_fruit_quality(
             filter_outside_roi=request.filter_outside_roi,
             evaluate_per_fruit=request.evaluate_per_fruit,
         )
-        if request.release_gpu_after:
+        if request.release_gpu_after or VIDEO_INSIGHT_AUTO_RELEASE_GPU:
             await asyncio.to_thread(video_insight_service.unload)
     except VideoInsightError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
