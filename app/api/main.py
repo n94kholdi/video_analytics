@@ -167,6 +167,13 @@ class StreamVideoInsightRequest(BaseModel):
 class StreamFruitQualityRequest(StreamVideoInsightRequest):
     """Evaluate fruit freshness over one live sampling window."""
 
+    model_config = ConfigDict(extra="ignore")
+
+    counting_result: dict[str, object] | None = None
+    filter_outside_roi: bool = False
+    evaluate_per_fruit: bool = True
+    release_gpu_after: bool = False
+
 @app.get("/health")
 def health() -> dict[str, object]:
     analytical_store = analytics_repository.health()
@@ -410,12 +417,25 @@ async def interpret_live_video(request: StreamVideoInsightRequest) -> dict[str, 
 async def interpret_fruit_quality(
     media: Annotated[UploadFile, File(...)],
     num_frames: Annotated[int, Form(ge=1, le=16)] = 8,
+    counting_result: Annotated[str | None, Form()] = None,
+    filter_outside_roi: Annotated[bool, Form()] = False,
+    evaluate_per_fruit: Annotated[bool, Form()] = True,
+    release_gpu_after: Annotated[bool, Form()] = False,
 ) -> dict[str, object]:
-    """Score visible fruit freshness in one image or a sampled video."""
+    """Score visible fruit freshness in one image or a sampled video, optionally merged with counting JSON."""
 
     suffix = Path(media.filename or "").suffix.lower()
     if suffix not in ALLOWED_IMAGE_SUFFIXES | ALLOWED_VIDEO_SUFFIXES:
         raise HTTPException(status_code=422, detail="unsupported fruit image or video type")
+    parsed_counting: dict[str, object] | None = None
+    if counting_result and counting_result.strip():
+        try:
+            candidate = json.loads(counting_result)
+            if not isinstance(candidate, dict):
+                raise ValueError("counting_result must be a JSON object")
+            parsed_counting = candidate
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=f"invalid counting_result JSON: {exc}") from exc
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=JOBS_ROOT) as scratch_dir:
@@ -432,8 +452,14 @@ async def interpret_fruit_quality(
                     extract_video_frames, media_path, num_frames=num_frames
                 )
             result = await asyncio.to_thread(
-                video_insight_service.interpret_fruit_quality, frames
+                video_insight_service.interpret_fruit_quality,
+                frames,
+                counting_result=parsed_counting,
+                filter_outside_roi=filter_outside_roi,
+                evaluate_per_fruit=evaluate_per_fruit,
             )
+            if release_gpu_after:
+                await asyncio.to_thread(video_insight_service.unload)
     except VideoInsightError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     finally:
@@ -457,11 +483,25 @@ async def interpret_live_fruit_quality(
             sample_interval_seconds=request.interval_seconds / (request.num_frames - 1),
         )
         result = await asyncio.to_thread(
-            video_insight_service.interpret_fruit_quality, frames
+            video_insight_service.interpret_fruit_quality,
+            frames,
+            counting_result=request.counting_result,
+            filter_outside_roi=request.filter_outside_roi,
+            evaluate_per_fruit=request.evaluate_per_fruit,
         )
+        if request.release_gpu_after:
+            await asyncio.to_thread(video_insight_service.unload)
     except VideoInsightError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"data": result}
+
+
+@app.post("/api/v1/gpu/release")
+async def release_insight_gpu_memory() -> dict[str, object]:
+    """Unload Qwen model from GPU memory so sequential services can allocate VRAM."""
+
+    unloaded = await asyncio.to_thread(video_insight_service.unload)
+    return {"data": {"released": True, "unloaded_model": unloaded}}
 
 
 @app.post("/api/v1/jobs", status_code=202)

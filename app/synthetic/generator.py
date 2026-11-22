@@ -50,7 +50,7 @@ class DatasetConfig:
         return DatasetConfig(
             dataset_id=dataset_id,
             profile=self.profile,
-            name=self.name or f"Synthetic {self.profile.title()} — {dataset_id}",
+            name=self.name or dataset_id,
             seed=self.seed,
             timezone_name=self.timezone_name,
             days=self.days if self.days is not None else defaults["days"],
@@ -123,22 +123,25 @@ def generate_dataset(config: DatasetConfig) -> Path:
 
 def _dimensions(config: DatasetConfig) -> dict[str, list[dict[str, object]]]:
     prefix = f"{PREFIX}{config.dataset_id}:"
-    fields = [{"id": f"{prefix}field:{index + 1:03d}", "name": f"میدان آزمایشی {index + 1}"}
+    fields = [{"id": f"{prefix}field:{index + 1:03d}", "name": _ordinal_name("میدان", index)}
               for index in range(int(config.fields or 0))]
     markets = []
     for index in range(int(config.markets or 0)):
         field = fields[index % len(fields)]
-        markets.append({"id": f"{prefix}market:{index + 1:03d}", "name": f"بازار آزمایشی {index + 1}", "fieldId": field["id"]})
+        markets.append({"id": f"{prefix}market:{index + 1:03d}", "name": _ordinal_name("بازار", index), "fieldId": field["id"]})
     booths = []
+    per_market: dict[str, int] = defaultdict(int)
     for index in range(int(config.booths or 0)):
         market = markets[index % len(markets)]
-        booths.append({"id": f"{prefix}booth:{index + 1:04d}", "number": f"S{index + 1:04d}", "marketId": market["id"]})
+        per_market[market["id"]] += 1  # numbers restart per market: (marketId, number) is unique
+        booths.append({"id": f"{prefix}booth:{index + 1:04d}", "number": str(per_market[market["id"]]), "marketId": market["id"]})
     cameras = []
     for index in range(int(config.cameras or 0)):
         booth = booths[index % len(booths)]
         market = next(item for item in markets if item["id"] == booth["marketId"])
         cameras.append({
-            "id": f"{prefix}camera:{index + 1:05d}", "name": f"دوربین مصنوعی {index + 1}",
+            "id": f"{prefix}camera:{index + 1:05d}",
+            "name": f"دوربین {index // len(booths) + 1} غرفه {booth['number']} {market['name']}",
             "fieldId": market["fieldId"], "marketId": market["id"], "boothId": booth["id"],
             "physicallyCalibrated": index % 4 != 0,
         })
@@ -171,12 +174,12 @@ def _generate_minutes(
             for camera_index, camera in enumerate(cameras):
                 camera_id = str(camera["id"])
                 factor = 0.72 + (camera_index % 11) * 0.055
-                arrival_rate = _arrival_rate(local, factor, config.profile)
+                arrival_rate = _arrival_rate(local, factor, config.profile) * 0.22
                 entries = _poisson(rng, arrival_rate)
                 due = exits_due[camera_id].pop(minute_index, 0)
                 occupancy[camera_id] = max(0, occupancy[camera_id] + entries - due)
                 for _ in range(entries):
-                    dwell = max(3, int(rng.lognormvariate(math.log(24), 0.45)))
+                    dwell = max(3, int(rng.lognormvariate(math.log(8), 0.45)))
                     exits_due[camera_id][minute_index + dwell] += 1
                 exits = min(due, occupancy[camera_id] + due)
                 sample_count = 30
@@ -253,8 +256,8 @@ def _generate_report(
             leaf: dict[str, dict[str, float]] = {}
             for index, booth in enumerate(booths):
                 growth = 1 + 0.18 * ((timestamp - start).total_seconds() / max(1, (end - start).total_seconds())) * (-1 if index % 5 == 0 else 1)
-                occupancy = max(0.0, _arrival_rate(local, 7.5 + index % 7, "report") * 18 * growth + rng.uniform(-2, 2))
-                entries = max(0, int(occupancy * rng.uniform(0.7, 1.1)))
+                occupancy = max(0.0, _arrival_rate(local, 0.8 + (index % 7) * 0.1, "report") * 4 * growth + rng.uniform(-0.5, 0.5))
+                entries = max(0, int(occupancy * 7.5 * rng.uniform(0.8, 1.1)))  # ~8 min dwell
                 wait = max(20.0, 65 + occupancy * (7.5 if _rush(local) else 3.5) + rng.uniform(-20, 20))
                 throughput = max(1, int(entries * min(1.0, 300 / wait)))
                 leaf[str(booth["id"])] = {"occupancy": occupancy, "entries": entries, "exits": max(0, entries + rng.randint(-2, 2)), "wait": wait, "throughput": throughput}
@@ -298,7 +301,7 @@ def _generate_report(
                 queue = {
                     "locationType": location_type, "locationId": location_id,
                     "locationName": flow["locationName"], "parentName": parent_name,
-                    "queueId": f"{location_id}:queue:1", "queueName": "صف خدمت مصنوعی",
+                    "queueId": f"{location_id}:queue:1", "queueName": "صف صندوق",
                     "bucketStart": timestamp.isoformat(), "sampleCount": queue_samples,
                     "lengthSum": round(max(0, value["wait"] / 90) * queue_samples, 3),
                     "lengthMax": max(1, math.ceil(value["wait"] / 45)),
@@ -331,7 +334,7 @@ def _generate_report(
                 event_stream.write(json.dumps({
                     "eventId": f"{PREFIX}{config.dataset_id}:event:{timestamp.strftime('%Y%m%d%H')}",
                     "cameraId": camera["id"], "eventType": "abnormal_congestion", "severity": "warning",
-                    "title": "ازدحام غیرعادی مصنوعی", "metricKey": "occupancy", "occurredAt": timestamp.isoformat(),
+                    "title": "ازدحام غیرعادی", "metricKey": "occupancy", "occurredAt": timestamp.isoformat(),
                     "value": round(organization["occupancy"], 2), "payload": {"synthetic": True},
                 }, ensure_ascii=False, separators=(",", ":")) + "\n")
                 totals["events"] += 1
@@ -357,21 +360,21 @@ def _queue_minute(rng: random.Random, state: _QueueState, timestamp: datetime, a
     while state.services and state.services[0][0] <= timestamp:
         _, wait = heapq.heappop(state.services)
         completed_waits.append(wait)
-    queue_arrivals = max(0, arrivals + (_poisson(rng, 0.35) if _rush(timestamp) else 0))
+    queue_arrivals = max(0, arrivals + (_poisson(rng, 0.03) if _rush(timestamp) else 0))
     for _ in range(queue_arrivals):
         state.waiting.append(timestamp)
-    capacity = 2
+    capacity = 1
     while len(state.services) < capacity and state.waiting:
         arrived = state.waiting.popleft()
         wait = (timestamp - arrived).total_seconds()
-        service_seconds = max(30, rng.lognormvariate(math.log(150), 0.32))
+        service_seconds = max(30, rng.lognormvariate(math.log(75), 0.35))
         heapq.heappush(state.services, (timestamp + timedelta(seconds=service_seconds), wait))
     waits = [(timestamp - arrived).total_seconds() for arrived in state.waiting]
     current_wait = sum(waits) / len(waits) if waits else 0.0
     length = len(state.waiting)
     samples = 30
     return {
-        "queueId": "service-1", "queueName": "صف خدمت مصنوعی", "sampleCount": samples,
+        "queueId": "service-1", "queueName": "صف صندوق", "sampleCount": samples,
         "lengthSum": float(length * samples), "lengthMax": length + (1 if queue_arrivals else 0), "lengthLast": length,
         "waitSumSeconds": current_wait * samples, "waitSampleCount": samples,
         "completedWaitSeconds": [round(value, 2) for value in completed_waits],
@@ -389,11 +392,11 @@ def _events(config: DatasetConfig, camera: dict[str, object], timestamp: datetim
         state.overloaded = overloaded
         kind = "queue_overflow_started" if overloaded else "queue_overflow_ended"
         events.append({"eventId": f"{PREFIX}{config.dataset_id}:event:{camera['id']}:{timestamp.isoformat()}:{kind}", "eventType": kind,
-                       "severity": "warning", "title": "تغییر وضعیت صف مصنوعی", "occurredAt": timestamp.isoformat(),
+                       "severity": "warning", "title": "تغییر وضعیت صف", "occurredAt": timestamp.isoformat(),
                        "metricKey": "criticalMinutes", "value": float(queue["lengthLast"]), "payload": {"synthetic": True}})
     if local.hour == 20 and local.minute == 17 and int(str(camera["id"]).rsplit(":", 1)[-1]) % 37 == 0:
         events.append({"eventId": f"{PREFIX}{config.dataset_id}:event:{camera['id']}:{timestamp.isoformat()}:restricted", "eventType": "restricted_area_confirmed",
-                       "severity": "critical", "title": "ورود مصنوعی به محدوده ممنوعه", "occurredAt": timestamp.isoformat(),
+                       "severity": "critical", "title": "ورود به محدوده ممنوعه", "occurredAt": timestamp.isoformat(),
                        "metricKey": "restrictedEvents", "value": 1, "payload": {"synthetic": True, "confidence": round(rng.uniform(.88, .99), 3)}})
     return events
 
@@ -420,7 +423,7 @@ def _arrival_rate(local: datetime, factor: float, profile: Profile) -> float:
     hour = local.hour + local.minute / 60
     morning = math.exp(-((hour - 10.5) / 2.2) ** 2)
     evening = 1.25 * math.exp(-((hour - 18.0) / 2.6) ** 2)
-    open_factor = 0.04 if hour < 6 or hour >= 23 else 0.18 + morning + evening
+    open_factor = 0.01 if hour < 7 or hour >= 22 else 0.18 + morning + evening
     weekend = 1.35 if local.weekday() in (3, 4) else 1.0
     profile_factor = 1.15 if profile == "report" else 1.0
     return max(0.002, factor * open_factor * weekend * profile_factor)
@@ -546,6 +549,15 @@ def _parent_name(location_type: str, location: dict[str, object], dimensions: di
     parent_group = "fields" if location_type == "market" else "markets"
     parent = next(item for item in dimensions[parent_group] if item["id"] == location[parent_key])
     return str(parent["name"])
+
+
+_DIRECTIONS = ("شمالی", "جنوبی", "شرقی", "غربی", "مرکزی")
+
+
+def _ordinal_name(kind: str, index: int) -> str:
+    """بازار شمالی، بازار جنوبی، ... then بازار شمالی ۲ once directions run out."""
+    name = f"{kind} {_DIRECTIONS[index % len(_DIRECTIONS)]}"
+    return name if index < len(_DIRECTIONS) else f"{name} {index // len(_DIRECTIONS) + 1}"
 
 
 def _location_name(location_type: str, location: dict[str, object]) -> str:

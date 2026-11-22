@@ -90,7 +90,7 @@ class SyntheticDatasetManager:
         booths = _object_list(value, "booths")
         cameras = _object_list(value, "cameras")
         with self.repository.connection() as connection, connection.cursor() as cursor:
-            cursor.execute('INSERT INTO "BoothCategory" (id,name,"updatedAt") VALUES (%s,%s,now())', (f"{PREFIX}category", "داده مصنوعی"))
+            cursor.execute('INSERT INTO "BoothCategory" (id,name,"updatedAt") VALUES (%s,%s,now())', (f"{PREFIX}category", "میوه و تره‌بار"))
             cursor.executemany('INSERT INTO "Field" (id,name,address,"updatedAt") VALUES (%s,%s,%s,now())',
                                [(item["id"], item["name"], "Synthetic test data") for item in fields])
             cursor.executemany('INSERT INTO "Market" (id,name,address,"fieldId","updatedAt") VALUES (%s,%s,%s,%s,now())',
